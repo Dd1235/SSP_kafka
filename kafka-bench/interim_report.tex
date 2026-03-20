@@ -1,0 +1,257 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single
+}
+
+\title{Characterizing Consumer Lag, Backpressure, and Recovery in Apache Kafka Using a Go-Based Benchmarking Framework\\Interim Results Report}
+
+\author{
+\IEEEauthorblockN{Author Name}
+\IEEEauthorblockA{Replace with course, institution, and email}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This interim report presents the current state of a Go-based benchmarking framework intended to study Apache Kafka under slow-consumer and backpressure conditions. The long-term project goal is to characterize how consumer lag develops, how configuration choices influence overload behavior, and how quickly the system recovers once bottlenecks are removed. The current implementation already supports configurable producer load generation, Kafka topic setup, Docker-based deployment, percentile latency measurement, and automated parameter sweeps over compression codecs and producer acknowledgment policies. Experiments were executed on a local single-node Kafka deployment in KRaft mode with persistent storage enabled. The resulting artifact set includes a baseline 30-second benchmark, a compression sweep, and an acknowledgment sweep. These runs provide useful producer-side throughput and latency measurements, and show that Snappy performs best among the tested codecs for the current local setup, while stronger acknowledgment semantics increase tail latency. However, the current framework does not yet achieve the main project objective: all saved runs report zero consumed messages, so consumer lag, backpressure, and recovery are not yet characterized. This report therefore documents the implemented system, interprets the available producer-side results, and clearly states the limitations that must be addressed in the next phase.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Apache Kafka, benchmarking, Go, throughput, tail latency, backpressure, consumer lag
+\end{IEEEkeywords}
+
+\section{Introduction}
+Apache Kafka is widely used as a distributed event streaming platform because it can sustain high write throughput, retain ordered logs by partition, and decouple producers from consumers. For many practical systems, however, raw throughput alone is not enough. A system may behave well under balanced load and still degrade sharply when consumers become slow, downstream processing stalls, or backlog accumulates. In such cases, the important questions are not only how fast Kafka can ingest data, but also how consumer lag evolves, how tail latency changes under stress, and how rapidly the system recovers after the bottleneck is removed.
+
+This project aims to build a configurable Kafka benchmarking framework in Go for studying precisely those behaviors. The intended framework allows control over message rate, message size, batching, concurrency, acknowledgment strategy, and eventually consumer-side processing delay and offset behavior. The broader motivation is aligned with Kafka's original design emphasis on high-throughput log processing \cite{kreps2011kafka} and with prior work showing that tail behavior, not average behavior, often dominates the user-visible quality of distributed systems \cite{dean2013tail}.
+
+The current repository represents an interim stage. The framework already supports configurable producer-side benchmarking and automated sweeps, but it has not yet reached the core slow-consumer study. This report therefore has two purposes: first, to document the implementation and the current experiment setup; second, to present the available producer-side results while explicitly identifying the missing capabilities needed for consumer-lag, backpressure, and recovery analysis.
+
+\section{Background and Target Metrics}
+\subsection{Kafka Concepts}
+A Kafka topic is divided into partitions, each of which is an ordered append-only log. Producers write records to partitions, and consumers read them by offset. Consumer groups allow partitions to be distributed across cooperating consumers so that each partition is processed by one member of the group at a time. Lag is the difference between the latest available broker offset and the latest consumed or committed offset. Lag is the key metric for understanding whether consumers are keeping up with producers.
+
+Producer acknowledgment mode also matters. With \texttt{acks=0}, the client does not wait for a broker response. With \texttt{acks=1}, the leader broker acknowledges a write. With \texttt{acks=all}, all in-sync replicas must acknowledge. These policies affect both reliability semantics and latency.
+
+\subsection{Metrics Used in This Interim Stage}
+The current framework exports the following metrics:
+
+\begin{itemize}
+\item \textbf{Messages sent}: producer successes counted from the asynchronous producer success channel.
+\item \textbf{Messages received}: consumer-side count of processed records.
+\item \textbf{Errors}: producer-side send errors.
+\item \textbf{Average rate}: successful messages divided by measured elapsed time.
+\item \textbf{Payload throughput}: total payload bytes divided by measured elapsed time.
+\item \textbf{Latency percentiles}: \texttt{p50}, \texttt{p90}, \texttt{p95}, \texttt{p99}, and \texttt{p99.9}.
+\item \textbf{Timeline snapshots}: per-interval rate and latency summaries.
+\end{itemize}
+
+In the current code, latency is producer-side enqueue-to-ack latency rather than end-to-end producer-to-consumer latency. This distinction is important because it means the present results characterize producer completion behavior, not downstream application completion behavior.
+
+\section{System Design and Implementation}
+\subsection{Deployment Environment}
+Kafka is deployed via Docker Compose using a single \texttt{confluentinc/cp-kafka:7.7.0} container in KRaft mode. ZooKeeper is not used. Persistence is enabled through a Docker volume, the default partition count is 12, and the replication factor is 1. The container is tuned for a local Apple M2 system with an approximately 1 GB JVM heap and G1GC enabled. This setup is intentionally simple and reproducible, but it is a local single-node environment rather than a multi-broker cluster.
+
+\subsection{Benchmark Execution Flow}
+The benchmark binary performs the following steps:
+
+\begin{enumerate}
+\item parse command-line flags into a benchmark configuration;
+\item ensure that the benchmark topic exists through Kafka admin APIs;
+\item run a warmup phase and discard those measurements;
+\item run the timed benchmark phase;
+\item emit periodic interval reports;
+\item compute final summary statistics;
+\item optionally write the results to JSON.
+\end{enumerate}
+
+The baseline operator workflow is automated by \texttt{run.sh}, which provides \texttt{build}, \texttt{start}, \texttt{quick}, \texttt{bench}, \texttt{sweep}, and \texttt{sweep-acks} commands.
+
+\subsection{Producer Path}
+The producer implementation uses IBM Sarama asynchronous producers. The code creates one \texttt{sarama.AsyncProducer} per configured producer worker and pairs each producer with two goroutines: a sender goroutine and an acknowledgment reader goroutine. The target message rate is divided evenly across workers using a ticker-based pacing loop.
+
+Each payload is based on a random pre-generated byte slice. The first 16 bytes are used as a header: worker ID, per-worker sequence number, and a send timestamp. The random payload body is a deliberate design choice because it prevents unrealistic compression wins. This makes codec sweeps more representative of overhead tradeoffs than of best-case compression ratio.
+
+Latency is measured when the producer success channel returns a successfully sent message. The timestamp embedded in the payload is decoded, and the elapsed time is recorded into the metrics collector.
+
+\subsection{Consumer Path}
+The code also constructs a Sarama consumer group and increments a received-message counter whenever messages are consumed and marked. However, all saved result files report zero received messages. Therefore, even though the consumer path exists in the codebase, it is not yet producing valid measurement artifacts for the current report.
+
+\subsection{Metrics Collector}
+The metrics subsystem uses atomic counters for sent messages, received messages, errors, and payload bytes. Latency samples are stored in memory as microseconds and are converted into percentile summaries at reporting time and at the end of a run. Interval reports are also stored as a timeline. This gives the framework a clean JSON output path suitable for later analysis, but it has two important limitations in the current version:
+
+\begin{itemize}
+\item the saved overall average rate includes post-run shutdown time and therefore understates the active benchmark rate;
+\item throughput is computed from configured payload bytes, not actual compressed network or disk bytes.
+\end{itemize}
+
+\section{Experimental Setup}
+The current artifact set corresponds to the following commands having been run:
+
+\begin{itemize}
+\item \texttt{./run.sh build}
+\item \texttt{./run.sh start}
+\item \texttt{./run.sh quick}
+\item \texttt{./run.sh bench}
+\item \texttt{./run.sh sweep}
+\item \texttt{./run.sh sweep-acks}
+\end{itemize}
+
+The \texttt{long} experiment was defined in the script but not executed. Persisted benchmark evidence therefore consists of one baseline benchmark JSON file, four compression-sweep JSON files, and three acknowledgment-sweep JSON files. The \texttt{quick} run serves as a smoke test but does not write a JSON artifact.
+
+The common benchmark configuration for the saved runs is:
+
+\begin{itemize}
+\item 12 partitions;
+\item 512-byte messages;
+\item target send rate of 10{,}000 messages/s;
+\item 8 producer workers;
+\item 4 consumer workers;
+\item persistent single-node Kafka deployment.
+\end{itemize}
+
+\section{Interim Results}
+\subsection{Baseline Benchmark}
+The baseline benchmark used a 30-second run with \texttt{acks=1} and Snappy compression. The saved final results are shown in Table \ref{tab:baseline}. The JSON artifact also includes interval snapshots, shown in Table \ref{tab:timeline}.
+
+\begin{table}[t]
+\caption{Baseline 30-Second Benchmark (\texttt{results.json})}
+\label{tab:baseline}
+\centering
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Messages sent & 296{,}077 \\
+Messages received & 0 \\
+Errors & 0 \\
+Saved average rate & 7{,}501.83 msg/s \\
+Payload throughput & 3.663 MB/s \\
+Mean latency & 3.803 ms \\
+\texttt{p50} & 3.713 ms \\
+\texttt{p95} & 6.495 ms \\
+\texttt{p99} & 9.954 ms \\
+\texttt{p99.9} & 21.104 ms \\
+Max latency & 41.752 ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Baseline Timeline Snapshots}
+\label{tab:timeline}
+\centering
+\begin{tabular}{rrrr}
+\toprule
+Elapsed (s) & Rate (msg/s) & \texttt{p50} (ms) & \texttt{p99} (ms) \\
+\midrule
+5 & 9{,}773.92 & 3.894 & 9.605 \\
+10 & 9{,}915.69 & 3.485 & 9.951 \\
+15 & 9{,}868.32 & 3.861 & 9.114 \\
+20 & 9{,}932.42 & 3.451 & 14.292 \\
+25 & 9{,}868.38 & 3.823 & 9.201 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The interval data shows that the active benchmark window ran close to the target send rate, roughly 9.8k--9.9k messages/s. The saved overall average rate is significantly lower because final elapsed time includes post-run teardown. This means the interval snapshots are a better indicator of steady-state producer throughput than the exported overall average.
+
+\subsection{Compression Sweep}
+The compression sweep compared \texttt{none}, \texttt{snappy}, \texttt{lz4}, and \texttt{zstd} under a 20-second run with \texttt{acks=1}. Results are shown in Table \ref{tab:compression}.
+
+\begin{table}[t]
+\caption{Compression Sweep Results}
+\label{tab:compression}
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Codec & Rate & \texttt{p50} & \texttt{p99} & \texttt{p99.9} \\
+ & (msg/s) & (ms) & (ms) & (ms) \\
+\midrule
+none & 7{,}717.62 & 3.746 & 8.052 & 21.907 \\
+snappy & 7{,}777.53 & 3.547 & 7.153 & 11.957 \\
+lz4 & 7{,}676.05 & 3.675 & 9.058 & 24.637 \\
+zstd & 7{,}704.50 & 3.705 & 9.810 & 51.643 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Snappy is the best overall codec in the current artifact set. It has the highest saved rate and the best tail latency profile. Zstandard exhibits the worst extreme tail latency, which is consistent with a workload where random payloads limit compression gains and codec overhead dominates.
+
+\subsection{Acknowledgment Sweep}
+The acknowledgment sweep compared \texttt{acks=0}, \texttt{acks=1}, and \texttt{acks=-1} with Snappy compression. Results are shown in Table \ref{tab:acks}.
+
+\begin{table}[t]
+\caption{Acknowledgment Sweep Results}
+\label{tab:acks}
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Acks & Rate & \texttt{p50} & \texttt{p99} & \texttt{p99.9} \\
+ & (msg/s) & (ms) & (ms) & (ms) \\
+\midrule
+0 & 7{,}581.22 & 2.714 & 5.439 & 13.516 \\
+1 & 7{,}684.88 & 3.647 & 9.421 & 18.360 \\
+-1 & 7{,}649.29 & 3.599 & 9.809 & 28.069 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+As expected, \texttt{acks=0} yields the lowest latency because the producer does not wait for broker acknowledgment. The \texttt{acks=1} configuration achieves the highest saved throughput in this local setup. The \texttt{acks=-1} case has a similar throughput level but a worse tail-latency profile.
+
+\section{Discussion}
+The current artifact set supports several useful interim observations. First, the producer side of the framework is capable of sustaining load near the 10k messages/s target during the active benchmark window. Second, Snappy appears to provide the best tradeoff among the tested compression codecs for this machine and workload. Third, stronger acknowledgment semantics increase tail latency, as expected.
+
+However, these are not yet the headline results promised by the project title. The repository was intended to characterize consumer lag, backpressure, and recovery. The current results do not do that. All saved JSON artifacts report zero consumed messages, so the framework cannot yet quantify whether consumers are keeping up, how lag evolves, or how quickly backlog drains after a bottleneck is removed.
+
+\section{Current Limitations}
+The following limitations should be stated explicitly in any interim evaluation:
+
+\begin{itemize}
+\item \textbf{No validated consumer measurements:} all saved runs report zero received messages.
+\item \textbf{No lag metric:} the framework does not yet export broker end offsets or committed consumer offsets.
+\item \textbf{No slow-consumer control:} there is no configurable processing delay or consumer-side throttling mechanism.
+\item \textbf{No recovery experiment:} there is no phased overload-and-recovery workflow.
+\item \textbf{Average-rate accounting is distorted:} exported overall averages include shutdown time.
+\item \textbf{Throughput is payload-based:} it does not measure compressed wire bytes or broker storage bytes.
+\item \textbf{Batch-size semantics are misleading:} the current \texttt{batch-size} flag is mapped to Sarama's \texttt{MaxMessageBytes}, not a true batch-byte threshold.
+\item \textbf{Single-node scope:} the current experiments use a one-broker, replication-factor-1 environment.
+\end{itemize}
+
+\section{Next Steps}
+The next development phase should prioritize the capabilities needed to answer the actual research question:
+
+\begin{enumerate}
+\item validate and fix consumer-side accounting so consumed-message counts become trustworthy;
+\item add configurable consumer processing delay or throttling;
+\item compute per-partition lag from broker end offsets and consumer committed offsets;
+\item add phased experiments for normal operation, induced slowdown, and recovery;
+\item separate producer-ack latency from end-to-end delivery latency;
+\item correct average-rate accounting so teardown time is excluded from the measured benchmark window.
+\end{enumerate}
+
+\section{Conclusion}
+At this interim stage, the project has succeeded in building a usable Go-based Kafka producer benchmark with Dockerized local deployment, parameterized execution, JSON result export, and producer-side throughput and latency analysis. The available experiments already show meaningful tradeoffs across compression codecs and acknowledgment modes. Nevertheless, the current framework does not yet support the main study of consumer lag, backpressure, and recovery. The next phase must therefore focus on validating consumer behavior, adding lag instrumentation, and introducing controlled slow-consumer scenarios so that the benchmark framework can move from producer characterization to full overload and recovery analysis.
+
+\begin{thebibliography}{1}
+
+\bibitem{kreps2011kafka}
+J. Kreps, N. Narkhede, and J. Rao, ``Kafka: A Distributed Messaging System for Log Processing,'' in \emph{Proc. NetDB}, 2011. [Online]. Available: \url{https://netman.aiops.org/~peidan/ANM2016/BigDataSystems/ReadingLists/2011NetDB_Kafka_slides.pdf}
+
+\bibitem{dean2013tail}
+J. Dean and L. A. Barroso, ``The Tail at Scale,'' \emph{Communications of the ACM}, vol. 56, no. 2, pp. 74--80, 2013. [Online]. Available: \url{https://research.google/pubs/the-tail-at-scale/}
+
+\end{thebibliography}
+
+\end{document}
