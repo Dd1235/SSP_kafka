@@ -4,3 +4,6 @@
 temp/
 results*
 bin/
+NEXT_PHASE.md
+.*
+CHANGES.md
