@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,7 @@ const (
 type Generator struct {
 	size int
 	mode Mode
+	mu   sync.Mutex // guards r; Next is called concurrently from producer workers
 	r    *rand.Rand
 	// cached immutable template for deterministic modes
 	zeros []byte
@@ -86,15 +88,21 @@ func (g *Generator) Next(buf []byte, seq uint64) {
 	}
 	switch m {
 	case ModeRandom:
+		g.mu.Lock()
 		g.r.Read(buf)
+		g.mu.Unlock()
 	case ModeZeros:
 		copy(buf, g.zeros)
 	case ModeText:
 		copy(buf, g.text)
 	case ModeJSON:
+		g.mu.Lock()
 		writeJSON(buf, g.r, seq)
+		g.mu.Unlock()
 	case ModeLogline:
+		g.mu.Lock()
 		writeLogline(buf, g.r, seq)
+		g.mu.Unlock()
 	}
 }
 
