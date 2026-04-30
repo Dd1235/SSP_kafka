@@ -12,16 +12,33 @@ import (
 	"kafka-bench-v4/internal/config"
 )
 
+type adminClient interface {
+	ListTopics() (map[string]sarama.TopicDetail, error)
+	DeleteTopic(topic string) error
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	Close() error
+}
+
+var (
+	newClusterAdmin = func(brokers []string, cfg *sarama.Config) (adminClient, error) {
+		return sarama.NewClusterAdmin(brokers, cfg)
+	}
+	topicDeletionDelay = 2 * time.Second
+)
+
 // Ensure creates the topic if missing. If reset=true, deletes and recreates.
 func Ensure(cfg *config.BenchConfig) error {
 	scfg := sarama.NewConfig()
 	scfg.Version = sarama.V3_6_0_0
-	admin, err := sarama.NewClusterAdmin(cfg.Brokers, scfg)
+	admin, err := newClusterAdmin(cfg.Brokers, scfg)
 	if err != nil {
 		return fmt.Errorf("cluster admin: %w", err)
 	}
 	defer admin.Close()
+	return ensureWithAdmin(cfg, admin, time.Sleep)
+}
 
+func ensureWithAdmin(cfg *config.BenchConfig, admin adminClient, sleep func(time.Duration)) error {
 	topics, err := admin.ListTopics()
 	if err != nil {
 		return fmt.Errorf("list topics: %w", err)
@@ -33,7 +50,7 @@ func Ensure(cfg *config.BenchConfig) error {
 			return fmt.Errorf("delete topic: %w", err)
 		}
 		// Broker needs a moment for deletion to finalize.
-		time.Sleep(2 * time.Second)
+		sleep(topicDeletionDelay)
 		topics, _ = admin.ListTopics()
 	}
 

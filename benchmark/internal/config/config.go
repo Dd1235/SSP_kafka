@@ -13,23 +13,25 @@ package config
 import (
 	"flag"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 )
 
 type BenchConfig struct {
 	// --- Connection / topic ---
-	Brokers   []string
-	Topic     string
-	GroupID   string
+	Brokers    []string
+	Topic      string
+	GroupID    string
 	ResetTopic bool // delete & recreate topic before run (clean slate)
 
 	// --- Workload shape ---
-	MessageSize   int
-	TargetRate    int // msgs/sec total (split across producer workers)
-	Duration      time.Duration
+	MessageSize    int
+	TargetRate     int // msgs/sec total (split across producer workers)
+	Duration       time.Duration
 	WarmupDuration time.Duration
-	Partitions    int
+	Partitions     int
 
 	// --- Adaptive backpressure (optional, off by default) ---
 	// When MaxLag > 0, the producer pool watches total consumer lag (via
@@ -72,11 +74,11 @@ type BenchConfig struct {
 	PayloadSeed int64  // deterministic generation
 
 	// --- Observability ---
-	ReportInterval time.Duration
+	ReportInterval  time.Duration
 	LagPollInterval time.Duration
 	SysPerfInterval time.Duration
-	OutputFile     string
-	JSONOutput     bool
+	OutputFile      string
+	JSONOutput      bool
 
 	// --- Scope switches ---
 	ProducerOnly bool
@@ -84,66 +86,86 @@ type BenchConfig struct {
 }
 
 func Parse() *BenchConfig {
+	c, err := parseArgs(os.Args[1:], os.Stderr)
+	if err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	return c
+}
+
+func ParseArgs(args []string) (*BenchConfig, error) {
+	return parseArgs(args, io.Discard)
+}
+
+func parseArgs(args []string, output io.Writer) (*BenchConfig, error) {
 	c := &BenchConfig{}
+	fs := flag.NewFlagSet("bench", flag.ContinueOnError)
+	fs.SetOutput(output)
 
-	broker := flag.String("broker", "localhost:9092", "Kafka broker (comma-separated for list)")
-	flag.StringVar(&c.Topic, "topic", "bench-topic-v4", "Kafka topic")
-	flag.StringVar(&c.GroupID, "group", "bench-group-v4", "Consumer group id")
-	flag.BoolVar(&c.ResetTopic, "reset-topic", true, "Delete+recreate topic before run for a clean slate")
+	broker := fs.String("broker", "localhost:9092", "Kafka broker (comma-separated for list)")
+	fs.StringVar(&c.Topic, "topic", "bench-topic-v4", "Kafka topic")
+	fs.StringVar(&c.GroupID, "group", "bench-group-v4", "Consumer group id")
+	fs.BoolVar(&c.ResetTopic, "reset-topic", true, "Delete+recreate topic before run for a clean slate")
 
-	flag.IntVar(&c.MessageSize, "msg-size", 512, "Message size in bytes (min 16 for header)")
-	flag.IntVar(&c.TargetRate, "rate", 10000, "Target total messages/sec")
-	duration := flag.Duration("duration", 30*time.Second, "Benchmark duration")
-	warmup := flag.Duration("warmup", 3*time.Second, "Warmup duration (excluded from stats)")
-	flag.IntVar(&c.Partitions, "partitions", 12, "Topic partition count")
+	fs.IntVar(&c.MessageSize, "msg-size", 512, "Message size in bytes (min 16 for header)")
+	fs.IntVar(&c.TargetRate, "rate", 10000, "Target total messages/sec")
+	duration := fs.Duration("duration", 30*time.Second, "Benchmark duration")
+	warmup := fs.Duration("warmup", 3*time.Second, "Warmup duration (excluded from stats)")
+	fs.IntVar(&c.Partitions, "partitions", 12, "Topic partition count")
 
-	flag.IntVar(&c.ProducerWorkers, "producers", 8, "Producer goroutines")
-	flag.IntVar(&c.BatchBytes, "batch-bytes", 65536, "Producer flush byte threshold")
-	flag.IntVar(&c.LingerMs, "linger-ms", 5, "Producer linger (flush frequency) ms")
-	flag.IntVar(&c.Acks, "acks", 1, "Acks: 0 (none), 1 (leader), -1 (all)")
-	flag.StringVar(&c.Compression, "compression", "snappy", "none|gzip|snappy|lz4|zstd")
-	flag.IntVar(&c.MaxMessageBytes, "max-msg-bytes", 1<<20, "Per-message hard cap (bytes)")
+	fs.IntVar(&c.ProducerWorkers, "producers", 8, "Producer goroutines")
+	fs.IntVar(&c.BatchBytes, "batch-bytes", 65536, "Producer flush byte threshold")
+	fs.IntVar(&c.LingerMs, "linger-ms", 5, "Producer linger (flush frequency) ms")
+	fs.IntVar(&c.Acks, "acks", 1, "Acks: 0 (none), 1 (leader), -1 (all)")
+	fs.StringVar(&c.Compression, "compression", "snappy", "none|gzip|snappy|lz4|zstd")
+	fs.IntVar(&c.MaxMessageBytes, "max-msg-bytes", 1<<20, "Per-message hard cap (bytes)")
 
-	flag.IntVar(&c.ConsumerWorkers, "consumers", 4, "Consumer goroutines in group")
-	flag.StringVar(&c.InitialOffset, "initial-offset", "oldest",
+	fs.IntVar(&c.ConsumerWorkers, "consumers", 4, "Consumer goroutines in group")
+	fs.StringVar(&c.InitialOffset, "initial-offset", "oldest",
 		"oldest | newest — oldest ensures no messages missed while group rebalances")
-	flag.DurationVar(&c.ConsumerDelay, "consumer-delay", 0,
+	fs.DurationVar(&c.ConsumerDelay, "consumer-delay", 0,
 		"Per-message processing delay (simulate slow consumer)")
-	flag.DurationVar(&c.ConsumerJitter, "consumer-jitter", 0,
+	fs.DurationVar(&c.ConsumerJitter, "consumer-jitter", 0,
 		"Uniform 0..jitter added to consumer-delay per message")
-	flag.DurationVar(&c.PhaseDuration, "phase-duration", 0,
+	fs.DurationVar(&c.PhaseDuration, "phase-duration", 0,
 		"If > 0, after this wall time, switch consumer-delay to phase-delay (recovery test)")
-	flag.DurationVar(&c.PhaseDelay, "phase-delay", 0,
+	fs.DurationVar(&c.PhaseDelay, "phase-delay", 0,
 		"Consumer delay after phase switch (e.g. set to 0 to drain backlog)")
 
-	flag.IntVar(&c.MaxLag, "max-lag", 0,
+	fs.IntVar(&c.MaxLag, "max-lag", 0,
 		"Adaptive backpressure: pause producer when total consumer lag exceeds this (0 = disabled).")
-	flag.IntVar(&c.ResumeLag, "resume-lag", 0,
+	fs.IntVar(&c.ResumeLag, "resume-lag", 0,
 		"Adaptive backpressure: resume sending once lag falls below this (0 -> max-lag/2).")
-	flag.DurationVar(&c.BPPollInterval, "bp-poll", 200*time.Millisecond,
+	fs.DurationVar(&c.BPPollInterval, "bp-poll", 200*time.Millisecond,
 		"Adaptive backpressure: controller tick interval.")
 
-	flag.IntVar(&c.BurstRate, "burst-rate", 0,
+	fs.IntVar(&c.BurstRate, "burst-rate", 0,
 		"Peak msgs/sec during burst (>0 enables bursty mode; default 0 = constant rate)")
-	flag.DurationVar(&c.BurstDuration, "burst-duration", 0,
+	fs.DurationVar(&c.BurstDuration, "burst-duration", 0,
 		"On-duration of each burst (e.g. 3s). Requires -burst-rate and -burst-period.")
-	flag.DurationVar(&c.BurstPeriod, "burst-period", 0,
+	fs.DurationVar(&c.BurstPeriod, "burst-period", 0,
 		"Period between burst start times (e.g. 12s). Off-burst portion = burst-period - burst-duration.")
 
-	flag.StringVar(&c.PayloadMode, "payload", "mixed",
+	fs.StringVar(&c.PayloadMode, "payload", "mixed",
 		"random|zeros|text|json|logline|mixed — affects compressibility, not size")
-	flag.Int64Var(&c.PayloadSeed, "payload-seed", 42, "Seed for payload RNG (reproducible)")
+	fs.Int64Var(&c.PayloadSeed, "payload-seed", 42, "Seed for payload RNG (reproducible)")
 
-	flag.DurationVar(&c.ReportInterval, "report-interval", 5*time.Second, "Live stats interval")
-	flag.DurationVar(&c.LagPollInterval, "lag-interval", 2*time.Second, "How often to query broker/consumer lag")
-	flag.DurationVar(&c.SysPerfInterval, "sysperf-interval", 2*time.Second, "How often to sample runtime CPU/mem/GC")
-	flag.StringVar(&c.OutputFile, "output", "", "Write result JSON to this file")
-	flag.BoolVar(&c.JSONOutput, "json", false, "Also print JSON to stdout")
+	fs.DurationVar(&c.ReportInterval, "report-interval", 5*time.Second, "Live stats interval")
+	fs.DurationVar(&c.LagPollInterval, "lag-interval", 2*time.Second, "How often to query broker/consumer lag")
+	fs.DurationVar(&c.SysPerfInterval, "sysperf-interval", 2*time.Second, "How often to sample runtime CPU/mem/GC")
+	fs.StringVar(&c.OutputFile, "output", "", "Write result JSON to this file")
+	fs.BoolVar(&c.JSONOutput, "json", false, "Also print JSON to stdout")
 
-	flag.BoolVar(&c.ProducerOnly, "producer-only", false, "Skip consumer")
-	flag.BoolVar(&c.ConsumerOnly, "consumer-only", false, "Skip producer")
+	fs.BoolVar(&c.ProducerOnly, "producer-only", false, "Skip consumer")
+	fs.BoolVar(&c.ConsumerOnly, "consumer-only", false, "Skip producer")
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
 
 	c.Brokers = strings.Split(*broker, ",")
 	c.Duration = *duration
@@ -152,7 +174,7 @@ func Parse() *BenchConfig {
 	if c.MessageSize < 16 {
 		c.MessageSize = 16 // header-only
 	}
-	return c
+	return c, nil
 }
 
 func (c *BenchConfig) Print() {

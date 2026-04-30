@@ -36,6 +36,17 @@ type Pool struct {
 }
 
 func NewPool(cfg *config.BenchConfig, col *metrics.Collector) (*Pool, error) {
+	scfg := buildSaramaConfig(cfg)
+	grp, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.GroupID, scfg)
+	if err != nil {
+		return nil, fmt.Errorf("consumer group: %w", err)
+	}
+	p := &Pool{cfg: cfg, col: col, group: grp, jitterNs: cfg.ConsumerJitter.Nanoseconds()}
+	p.currentDelayNs.Store(cfg.ConsumerDelay.Nanoseconds())
+	return p, nil
+}
+
+func buildSaramaConfig(cfg *config.BenchConfig) *sarama.Config {
 	scfg := sarama.NewConfig()
 	scfg.Version = sarama.V3_6_0_0
 	scfg.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{
@@ -54,14 +65,7 @@ func NewPool(cfg *config.BenchConfig, col *metrics.Collector) (*Pool, error) {
 	// Shorter session timeout so lost workers are detected fast
 	scfg.Consumer.Group.Session.Timeout = 10 * time.Second
 	scfg.Consumer.Group.Heartbeat.Interval = 3 * time.Second
-
-	grp, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.GroupID, scfg)
-	if err != nil {
-		return nil, fmt.Errorf("consumer group: %w", err)
-	}
-	p := &Pool{cfg: cfg, col: col, group: grp, jitterNs: cfg.ConsumerJitter.Nanoseconds()}
-	p.currentDelayNs.Store(cfg.ConsumerDelay.Nanoseconds())
-	return p, nil
+	return scfg
 }
 
 // Run blocks until ctx is cancelled.

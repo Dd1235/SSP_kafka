@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"kafka-bench-v4/internal/config"
-	"kafka-bench-v4/internal/lag"
 	"kafka-bench-v4/internal/metrics"
 	"kafka-bench-v4/internal/payload"
 
@@ -39,10 +38,14 @@ type Pool struct {
 	// hysteresis thresholds. When `paused` is true, every sender's
 	// waitForCredit() blocks until the controller clears it. Counters
 	// accumulate across the run for the report.
-	lagPoller      *lag.Poller
+	lagPoller      lagSnapshot
 	paused         atomic.Bool
 	throttleEvents atomic.Int64
 	throttleNanos  atomic.Int64
+}
+
+type lagSnapshot interface {
+	Current() int64
 }
 
 // inFlight tracks enqueue time per message so we can compute
@@ -51,7 +54,7 @@ type Pool struct {
 type inFlight struct{ enqueuedAt time.Time }
 
 func NewPool(cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Generator,
-	lagPoller *lag.Poller) (*Pool, error) {
+	lagPoller lagSnapshot) (*Pool, error) {
 	scfg := buildSaramaConfig(cfg)
 	ps := make([]sarama.AsyncProducer, cfg.ProducerWorkers)
 	for i := range ps {

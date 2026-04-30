@@ -23,22 +23,22 @@ import (
 )
 
 type Sample struct {
-	ElapsedS     float64          `json:"elapsed_s"`
-	TotalLag     int64            `json:"total_lag"`
-	MaxLag       int64            `json:"max_partition_lag"`
-	Committed    int64            `json:"committed_offset_sum"`
-	EndOffset    int64            `json:"end_offset_sum"`
-	PerPartition map[int32]int64  `json:"per_partition_lag"`
+	ElapsedS     float64         `json:"elapsed_s"`
+	TotalLag     int64           `json:"total_lag"`
+	MaxLag       int64           `json:"max_partition_lag"`
+	Committed    int64           `json:"committed_offset_sum"`
+	EndOffset    int64           `json:"end_offset_sum"`
+	PerPartition map[int32]int64 `json:"per_partition_lag"`
 }
 
 type Poller struct {
-	cfg      *config.BenchConfig
-	client   sarama.Client
-	admin    sarama.ClusterAdmin
-	samples  []Sample
-	mu       sync.Mutex
-	start    time.Time
-	done     chan struct{}
+	cfg     *config.BenchConfig
+	client  sarama.Client
+	admin   sarama.ClusterAdmin
+	samples []Sample
+	mu      sync.Mutex
+	start   time.Time
+	done    chan struct{}
 	// current is the most recent total-lag observation. Exposed via
 	// Current() so the producer pool can read it atomically without
 	// touching the samples slice. -1 means "no sample yet."
@@ -94,7 +94,7 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-func (p *Poller) Wait()           { <-p.done }
+func (p *Poller) Wait() { <-p.done }
 func (p *Poller) Close() {
 	if p.admin != nil {
 		_ = p.admin.Close()
@@ -114,8 +114,8 @@ func (p *Poller) Samples() []Sample {
 
 // Summary aggregates the timeline into a few headline numbers.
 type Summary struct {
-	MaxTotalLag   int64   `json:"max_total_lag"`
-	FinalTotalLag int64   `json:"final_total_lag"`
+	MaxTotalLag   int64 `json:"max_total_lag"`
+	FinalTotalLag int64 `json:"final_total_lag"`
 	// DrainRate is msg/s at which lag decreased during the recovery portion
 	// (only meaningful if lag went up then down).
 	RecoveryDrainRate float64 `json:"recovery_drain_rate_msg_per_sec"`
@@ -130,6 +130,10 @@ func (p *Poller) Summary() Summary {
 	s := make([]Sample, len(p.samples))
 	copy(s, p.samples)
 	p.mu.Unlock()
+	return summarizeSamples(s)
+}
+
+func summarizeSamples(s []Sample) Summary {
 	if len(s) == 0 {
 		return Summary{}
 	}
@@ -206,14 +210,24 @@ func (p *Poller) takeSample(now time.Time) (Sample, error) {
 		}
 	}
 
+	s := buildSample(p.start, now, parts, ends, committed)
+	p.current.Store(s.TotalLag)
+	s.Committed = commSum
+	s.EndOffset = endSum
+	return s, nil
+}
+
+func buildSample(start, now time.Time, parts []int32, ends, committed map[int32]int64) Sample {
 	per := make(map[int32]int64, len(parts))
-	var total, maxLag int64
+	var total, maxLag, commSum, endSum int64
 	for _, part := range parts {
 		end := ends[part]
+		endSum += end
 		c, ok := committed[part]
 		if !ok || c < 0 {
 			c = 0
 		}
+		commSum += c
 		diff := end - c
 		if diff < 0 {
 			diff = 0
@@ -224,13 +238,12 @@ func (p *Poller) takeSample(now time.Time) (Sample, error) {
 			maxLag = diff
 		}
 	}
-	p.current.Store(total)
 	return Sample{
-		ElapsedS:     now.Sub(p.start).Seconds(),
+		ElapsedS:     now.Sub(start).Seconds(),
 		TotalLag:     total,
 		MaxLag:       maxLag,
 		Committed:    commSum,
 		EndOffset:    endSum,
 		PerPartition: per,
-	}, nil
+	}
 }

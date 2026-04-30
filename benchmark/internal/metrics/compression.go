@@ -17,7 +17,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/klauspost/compress/s2"    // Sarama uses klauspost; s2 is snappy-compatible
+	"github.com/klauspost/compress/s2" // Sarama uses klauspost; s2 is snappy-compatible
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 )
@@ -33,7 +33,7 @@ type CompressionReport struct {
 
 type CodecResult struct {
 	CompressedBytes int     `json:"compressed_bytes"`
-	Ratio           float64 `json:"ratio"`          // raw / compressed; >1 means shrinkage
+	Ratio           float64 `json:"ratio"`           // raw / compressed; >1 means shrinkage
 	SpaceSavedPct   float64 `json:"space_saved_pct"` // 100 * (1 - comp/raw)
 	EncodeMicros    int64   `json:"encode_micros"`
 }
@@ -57,13 +57,17 @@ func BuildCompressionReport(samples [][]byte) CompressionReport {
 			continue
 		}
 		ratio := 0.0
-		if len(comp) > 0 {
-			ratio = float64(len(rb)) / float64(len(comp))
+		saved := 0.0
+		if len(rb) > 0 {
+			if len(comp) > 0 {
+				ratio = float64(len(rb)) / float64(len(comp))
+			}
+			saved = 100.0 * (1.0 - float64(len(comp))/float64(len(rb)))
 		}
 		rep.Codecs[name] = CodecResult{
 			CompressedBytes: len(comp),
 			Ratio:           ratio,
-			SpaceSavedPct:   100.0 * (1.0 - float64(len(comp))/float64(len(rb))),
+			SpaceSavedPct:   saved,
 			EncodeMicros:    us,
 		}
 	}
