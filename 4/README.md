@@ -36,6 +36,11 @@ the rest of the code keeps working.
 
 Result JSONs are written to `results-*.json` alongside the binary.
 
+The public GitHub Pages dashboard is a static viewer over the submitted result
+JSONs in `paper/data/`. To reproduce or extend the experiments locally, use the
+commands in this directory; to publish updated results, copy the new JSON files
+into `paper/data/` and rebuild the frontend from `site/`.
+
 ---
 
 ## Directory layout

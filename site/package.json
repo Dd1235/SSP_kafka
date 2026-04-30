@@ -1,0 +1,25 @@
+{
+  "name": "kafka-bench-explorer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "build:data": "node scripts/build-data.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "pnpm build:data && vite --host 0.0.0.0",
+    "build": "pnpm build:data && pnpm typecheck && vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5"
+  }
+}

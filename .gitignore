@@ -5,4 +5,13 @@ temp/
 bin/
 NEXT_PHASE.md
 .*
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+site/node_modules/
+site/dist/
+site/public/data/
+site/*.tsbuildinfo
+site/vite.config.d.ts
+site/vite.config.js
 CHANGES.md
