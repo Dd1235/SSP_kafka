@@ -185,6 +185,24 @@ case "$CMD" in
       -output results-bursty-heavy.json
     ;;
 
+  # Adaptive backpressure: same workload as the aggressive slow-consumer
+  # scenario, but the producer is allowed to throttle itself once total
+  # consumer lag exceeds 20k messages (resumes at 5k, hysteresis).
+  # Compare against results-slow-aggr.json (bp-off baseline).
+  bp-on)
+    build; kafka_up
+    "$BIN" \
+      -duration 40s -warmup 3s \
+      -rate 10000 -msg-size 512 \
+      -producers 8 -consumers 2 -partitions 12 \
+      -acks 1 -compression snappy \
+      -payload json \
+      -consumer-delay 4ms -consumer-jitter 1ms \
+      -max-lag 20000 -resume-lag 5000 -bp-poll 200ms \
+      -report-interval 4s -lag-interval 1s \
+      -output results-bp-on.json
+    ;;
+
   reset-topic)
     docker compose exec kafka kafka-topics \
       --bootstrap-server localhost:9092 \

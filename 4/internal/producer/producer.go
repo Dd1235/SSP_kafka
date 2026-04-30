@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kafka-bench-v4/internal/config"
+	"kafka-bench-v4/internal/lag"
 	"kafka-bench-v4/internal/metrics"
 	"kafka-bench-v4/internal/payload"
 
@@ -31,6 +33,16 @@ type Pool struct {
 	col       *metrics.Collector
 	producers []sarama.AsyncProducer
 	gen       *payload.Generator
+
+	// Adaptive backpressure: when cfg.MaxLag > 0, a controller goroutine
+	// flips `paused` based on poller.Current() crossing the high/low
+	// hysteresis thresholds. When `paused` is true, every sender's
+	// waitForCredit() blocks until the controller clears it. Counters
+	// accumulate across the run for the report.
+	lagPoller      *lag.Poller
+	paused         atomic.Bool
+	throttleEvents atomic.Int64
+	throttleNanos  atomic.Int64
 }
 
 // inFlight tracks enqueue time per message so we can compute
@@ -38,7 +50,8 @@ type Pool struct {
 // is the designated slot for this.
 type inFlight struct{ enqueuedAt time.Time }
 
-func NewPool(cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Generator) (*Pool, error) {
+func NewPool(cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Generator,
+	lagPoller *lag.Poller) (*Pool, error) {
 	scfg := buildSaramaConfig(cfg)
 	ps := make([]sarama.AsyncProducer, cfg.ProducerWorkers)
 	for i := range ps {
@@ -51,7 +64,18 @@ func NewPool(cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Gener
 		}
 		ps[i] = p
 	}
-	return &Pool{cfg: cfg, col: col, producers: ps, gen: gen}, nil
+	return &Pool{cfg: cfg, col: col, producers: ps, gen: gen, lagPoller: lagPoller}, nil
+}
+
+// ThrottleEvents returns the number of times the producer pool transitioned
+// from running to paused over the run's lifetime.
+func (p *Pool) ThrottleEvents() int64 { return p.throttleEvents.Load() }
+
+// ThrottlePaused returns the cumulative duration the pool spent in the
+// paused state. Time still accumulating in the current paused interval is
+// not included here; FinalThrottlePaused() flushes it on shutdown.
+func (p *Pool) ThrottlePaused() time.Duration {
+	return time.Duration(p.throttleNanos.Load())
 }
 
 func (p *Pool) Run(ctx context.Context) {
@@ -60,6 +84,14 @@ func (p *Pool) Run(ctx context.Context) {
 		ratePerWorker = 1
 	}
 	intervalNs := int64(float64(time.Second) / ratePerWorker)
+
+	// Optional adaptive-backpressure controller.
+	bpEnabled := p.cfg.MaxLag > 0 && p.lagPoller != nil
+	var bpDone chan struct{}
+	if bpEnabled {
+		bpDone = make(chan struct{})
+		go p.runThrottleController(ctx, bpDone)
+	}
 
 	bursty := p.cfg.BurstRate > 0 && p.cfg.BurstDuration > 0 && p.cfg.BurstPeriod > 0
 	var burstIntervalNs int64
@@ -94,6 +126,64 @@ func (p *Pool) Run(ctx context.Context) {
 	for _, prod := range p.producers {
 		prod.AsyncClose()
 	}
+	if bpEnabled {
+		<-bpDone
+	}
+}
+
+// runThrottleController is the credit-based backpressure brain. It polls
+// the lag.Poller's atomic snapshot every BPPollInterval and toggles
+// p.paused with hysteresis: pause when current lag > MaxLag, resume only
+// once it falls below ResumeLag (default = MaxLag/2). Senders consult
+// p.paused via waitForCredit().
+func (p *Pool) runThrottleController(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
+	resumeLag := int64(p.cfg.ResumeLag)
+	if resumeLag <= 0 {
+		resumeLag = int64(p.cfg.MaxLag) / 2
+	}
+	maxLag := int64(p.cfg.MaxLag)
+	t := time.NewTicker(p.cfg.BPPollInterval)
+	defer t.Stop()
+
+	var pausedSince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			if p.paused.Load() {
+				p.throttleNanos.Add(time.Since(pausedSince).Nanoseconds())
+				p.paused.Store(false)
+			}
+			return
+		case <-t.C:
+			cur := p.lagPoller.Current()
+			if cur < 0 {
+				continue
+			}
+			if !p.paused.Load() && cur > maxLag {
+				pausedSince = time.Now()
+				p.paused.Store(true)
+				p.throttleEvents.Add(1)
+			} else if p.paused.Load() && cur < resumeLag {
+				p.throttleNanos.Add(time.Since(pausedSince).Nanoseconds())
+				p.paused.Store(false)
+			}
+		}
+	}
+}
+
+// waitForCredit blocks while the throttle controller has the producer
+// paused. The poll interval is short enough that the producer resumes
+// promptly when the lag drops, while still being long enough that an
+// idle wait costs only one syscall per BPPollInterval/2.
+func (p *Pool) waitForCredit(ctx context.Context) {
+	for p.paused.Load() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(p.cfg.BPPollInterval / 2):
+		}
+	}
 }
 
 func (p *Pool) runSender(ctx context.Context, id int, prod sarama.AsyncProducer, intervalNs int64) {
@@ -108,6 +198,11 @@ func (p *Pool) runSender(ctx context.Context, id int, prod sarama.AsyncProducer,
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Adaptive backpressure: noop when MaxLag=0 (paused stays false).
+			p.waitForCredit(ctx)
+			if ctx.Err() != nil {
+				return
+			}
 			// Fresh allocation each message: Sarama retains the buffer after
 			// enqueue for async batching/compression.
 			msg := make([]byte, p.cfg.MessageSize)
@@ -146,6 +241,10 @@ func (p *Pool) runBurstySender(ctx context.Context, id int, prod sarama.AsyncPro
 	var seq uint32
 
 	emit := func() bool {
+		p.waitForCredit(ctx)
+		if ctx.Err() != nil {
+			return false
+		}
 		msg := make([]byte, p.cfg.MessageSize)
 		p.gen.Next(msg, uint64(workerID)<<32|uint64(seq))
 		now := time.Now()

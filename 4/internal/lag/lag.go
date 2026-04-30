@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -38,6 +39,10 @@ type Poller struct {
 	mu       sync.Mutex
 	start    time.Time
 	done     chan struct{}
+	// current is the most recent total-lag observation. Exposed via
+	// Current() so the producer pool can read it atomically without
+	// touching the samples slice. -1 means "no sample yet."
+	current atomic.Int64
 }
 
 func NewPoller(cfg *config.BenchConfig) (*Poller, error) {
@@ -52,13 +57,19 @@ func NewPoller(cfg *config.BenchConfig) (*Poller, error) {
 		cli.Close()
 		return nil, fmt.Errorf("lag admin: %w", err)
 	}
-	return &Poller{
+	p := &Poller{
 		cfg:    cfg,
 		client: cli,
 		admin:  adm,
 		done:   make(chan struct{}),
-	}, nil
+	}
+	p.current.Store(-1)
+	return p, nil
 }
+
+// Current returns the most recent observed total lag, or -1 if no sample
+// has been taken yet. Safe for concurrent reads from any goroutine.
+func (p *Poller) Current() int64 { return p.current.Load() }
 
 // Run blocks until ctx is cancelled.
 func (p *Poller) Run(ctx context.Context) {
@@ -213,6 +224,7 @@ func (p *Poller) takeSample(now time.Time) (Sample, error) {
 			maxLag = diff
 		}
 	}
+	p.current.Store(total)
 	return Sample{
 		ElapsedS:     now.Sub(p.start).Seconds(),
 		TotalLag:     total,

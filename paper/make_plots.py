@@ -357,6 +357,71 @@ def plot_bursty_summary():
     plt.close(fig)
 
 
+# 12. Adaptive backpressure: lag-vs-time, three configurations
+def plot_bp_compare():
+    runs = [
+        ("results-slow-aggr.json",   "no backpressure",       "#c44e52"),
+        ("results-bp-on.json",       "max-lag=20k (loose)",   "#dd8452"),
+        ("results-bp-tight.json",    "max-lag=5k (tight)",    "#4c72b0"),
+    ]
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5.4, 3.6), sharex=True)
+    for name, label, color in runs:
+        d = load(name)
+        lg = d["lag_timeline"]; tl = d["timeline"]
+        ax1.plot([s["elapsed_s"] for s in lg], [s["total_lag"]/1000 for s in lg],
+                 "-", color=color, lw=1.1, label=label)
+        ax2.plot([s["elapsed_s"] for s in tl], [s["inst_rate"]/1000 for s in tl],
+                 "-", color=color, lw=1.0)
+    ax1.set_ylabel("Total lag (k msgs)")
+    ax1.set_yscale("log")
+    ax1.set_ylim(1, 500)
+    ax1.legend(fontsize=7, loc="upper right")
+    # Annotate thresholds for clarity
+    ax1.axhline(20, color="#dd8452", ls=":", lw=0.5)
+    ax1.axhline(5,  color="#4c72b0", ls=":", lw=0.5)
+    ax2.set_ylabel("Send rate\n(k msg/s)")
+    ax2.set_xlabel("Elapsed time (s)")
+    fig.tight_layout()
+    fig.savefig(os.path.join(ASSETS, "bp_compare.pdf"))
+    plt.close(fig)
+
+
+# 13. Adaptive backpressure: bar summary across the three configs
+def plot_bp_summary():
+    runs = [
+        ("results-slow-aggr.json",  "off"),
+        ("results-bp-on.json",      "loose\n(20k)"),
+        ("results-bp-tight.json",   "tight\n(5k)"),
+    ]
+    peaks=[]; p99=[]; deliv=[]; rate=[]
+    for name, lbl in runs:
+        d = load(name)
+        fin = d["final"]; ls = d["lag_summary"]
+        sent = fin["messages_sent"]
+        recv = fin["messages_received"]
+        peaks.append(ls["max_total_lag"]/1000)
+        p99.append(fin["e2e_latency_ms"]["P99"]/1000.0)
+        deliv.append(min(100.0, 100.0 * recv / max(sent,1)))
+        rate.append(fin["avg_rate_msg_per_sec"]/1000)
+    x = np.arange(len(runs))
+    fig, axes = plt.subplots(1, 4, figsize=(7.2, 2.4))
+    titles = ["Peak lag\n(k msgs)", "E2E p99\n(seconds)",
+              "Delivery ratio\n(%)", "Send rate\n(k msg/s)"]
+    data = [peaks, p99, deliv, rate]
+    cols = ["#c44e52", "#c44e52", "#2ca02c", "#1f77b4"]
+    for ax, title, dat, color in zip(axes, titles, data, cols):
+        bars = ax.bar(x, dat, color=color)
+        ax.set_xticks(x); ax.set_xticklabels([lbl for _, lbl in runs])
+        ax.set_title(title, fontsize=9)
+        for b, v in zip(bars, dat):
+            ax.text(b.get_x()+b.get_width()/2, v*1.04, f"{v:.1f}", ha="center", fontsize=7)
+        if title.startswith("Delivery"):
+            ax.set_ylim(0, 115)
+    fig.tight_layout()
+    fig.savefig(os.path.join(ASSETS, "bp_summary.pdf"))
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     plot_baseline_timeline()
     plot_compression_sweep()
@@ -369,4 +434,6 @@ if __name__ == "__main__":
     plot_sysperf_gc()
     plot_bursty_panel()
     plot_bursty_summary()
+    plot_bp_compare()
+    plot_bp_summary()
     print("All plots written to", ASSETS)

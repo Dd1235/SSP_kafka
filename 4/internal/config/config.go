@@ -31,6 +31,16 @@ type BenchConfig struct {
 	WarmupDuration time.Duration
 	Partitions    int
 
+	// --- Adaptive backpressure (optional, off by default) ---
+	// When MaxLag > 0, the producer pool watches total consumer lag (via
+	// the existing lag.Poller) and pauses sending when lag exceeds MaxLag,
+	// resuming only once lag falls below ResumeLag. Hysteresis avoids
+	// oscillation around the threshold. Default zero values fully disable
+	// the feature: the existing constant-rate code path is unchanged.
+	MaxLag         int           // pause-above threshold (0 = disabled)
+	ResumeLag      int           // resume-below threshold (0 → MaxLag/2)
+	BPPollInterval time.Duration // controller tick (default 200 ms)
+
 	// --- Bursty workload (optional, off by default) ---
 	// When BurstRate > 0 and BurstDuration > 0 and BurstPeriod > 0, the
 	// producer alternates between TargetRate (off-burst) and BurstRate
@@ -106,6 +116,13 @@ func Parse() *BenchConfig {
 	flag.DurationVar(&c.PhaseDelay, "phase-delay", 0,
 		"Consumer delay after phase switch (e.g. set to 0 to drain backlog)")
 
+	flag.IntVar(&c.MaxLag, "max-lag", 0,
+		"Adaptive backpressure: pause producer when total consumer lag exceeds this (0 = disabled).")
+	flag.IntVar(&c.ResumeLag, "resume-lag", 0,
+		"Adaptive backpressure: resume sending once lag falls below this (0 -> max-lag/2).")
+	flag.DurationVar(&c.BPPollInterval, "bp-poll", 200*time.Millisecond,
+		"Adaptive backpressure: controller tick interval.")
+
 	flag.IntVar(&c.BurstRate, "burst-rate", 0,
 		"Peak msgs/sec during burst (>0 enables bursty mode; default 0 = constant rate)")
 	flag.DurationVar(&c.BurstDuration, "burst-duration", 0,
@@ -147,6 +164,14 @@ func (c *BenchConfig) Print() {
 	fmt.Printf("  Group:          %s  (initial-offset=%s)\n", c.GroupID, c.InitialOffset)
 	fmt.Printf("  Message size:   %d B   payload=%s (seed=%d)\n", c.MessageSize, c.PayloadMode, c.PayloadSeed)
 	fmt.Printf("  Target rate:    %d msg/s across %d producers\n", c.TargetRate, c.ProducerWorkers)
+	if c.MaxLag > 0 {
+		resume := c.ResumeLag
+		if resume <= 0 {
+			resume = c.MaxLag / 2
+		}
+		fmt.Printf("  Backpressure:   pause @ %d msgs, resume @ %d msgs, poll %v\n",
+			c.MaxLag, resume, c.BPPollInterval)
+	}
 	if c.BurstRate > 0 && c.BurstDuration > 0 && c.BurstPeriod > 0 {
 		fmt.Printf("  Burst:          %d msg/s for %v every %v (duty %.0f%%)\n",
 			c.BurstRate, c.BurstDuration, c.BurstPeriod,

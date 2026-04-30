@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"kafka-bench-v4/internal/config"
 	"kafka-bench-v4/internal/lag"
@@ -25,6 +26,9 @@ type Report struct {
 	SysPerf   []sysperf.Sample           `json:"sysperf_timeline"`
 	SysSum    sysperf.Summary            `json:"sysperf_summary"`
 	Compress  metrics.CompressionReport  `json:"compression_offline"`
+	// Adaptive backpressure stats (zero when -max-lag not set).
+	BPEvents  int64                      `json:"bp_events"`
+	BPPausedS float64                    `json:"bp_paused_s"`
 }
 
 func Build(cfg *config.BenchConfig, final metrics.FinalStats,
@@ -32,6 +36,7 @@ func Build(cfg *config.BenchConfig, final metrics.FinalStats,
 	lagTL []lag.Sample, lagSum lag.Summary,
 	sp []sysperf.Sample, spSum sysperf.Summary,
 	cr metrics.CompressionReport,
+	bpEvents int64, bpPaused time.Duration,
 ) Report {
 	return Report{
 		Config: map[string]any{
@@ -58,14 +63,19 @@ func Build(cfg *config.BenchConfig, final metrics.FinalStats,
 			"burst_rate":     cfg.BurstRate,
 			"burst_duration": cfg.BurstDuration.String(),
 			"burst_period":   cfg.BurstPeriod.String(),
+			"bp_max_lag":     cfg.MaxLag,
+			"bp_resume_lag":  cfg.ResumeLag,
+			"bp_poll":        cfg.BPPollInterval.String(),
 		},
-		Final:    final,
-		Timeline: tl,
-		Lag:      lagTL,
-		LagSum:   lagSum,
-		SysPerf:  sp,
-		SysSum:   spSum,
-		Compress: cr,
+		Final:     final,
+		Timeline:  tl,
+		Lag:       lagTL,
+		LagSum:    lagSum,
+		SysPerf:   sp,
+		SysSum:    spSum,
+		Compress:  cr,
+		BPEvents:  bpEvents,
+		BPPausedS: bpPaused.Seconds(),
 	}
 }
 
@@ -118,6 +128,12 @@ func PrintHuman(r Report) {
 		}
 	}
 
+	if r.BPEvents > 0 || r.BPPausedS > 0 {
+		fmt.Println()
+		fmt.Println("  ── Adaptive backpressure ──")
+		fmt.Printf("  Throttle events:  %d\n", r.BPEvents)
+		fmt.Printf("  Paused total:     %.2fs\n", r.BPPausedS)
+	}
 	if r.SysSum.Count > 0 {
 		fmt.Println()
 		fmt.Println("  ── SysPerf ──")

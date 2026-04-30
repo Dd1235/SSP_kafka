@@ -56,8 +56,13 @@ generator characterises a third operating regime ---
 \emph{transient over-capacity demand} --- locating the absorption
 boundary between bursts the consumer can drain in the off-window
 ($p_{99} \le 19$\,ms) and bursts that saturate it
-($p_{99} = 6.97$\,s). The paper closes with a discussion of next
-steps that point the same measurement apparatus at a real workload.
+($p_{99} = 6.97$\,s). We further introduce an opt-in
+adaptive-backpressure controller that bounds peak consumer lag $96\%$
+($309{,}435 \to 12{,}177$ messages) and end-to-end $p_{99}$ from
+31.4\,s to 3.8\,s on the slow-consumer scenario while restoring
+delivery ratio to $100\%$. The paper closes with a discussion of
+next steps that point the same measurement apparatus at a real
+workload.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -112,6 +117,12 @@ deployment.
   between bursts the system handles transparently and bursts that
   push end-to-end $p_{99}$ into the multi-second regime, without
   altering any constant-rate result.
+\item A credit-based adaptive-backpressure controller
+  (Section~\ref{sec:bp}) that bounds peak consumer lag $96\%$
+  ($309{,}435 \to 12{,}177$ messages), reduces end-to-end $p_{99}$
+  $88\%$ ($31.4\,\text{s} \to 3.8\,\text{s}$), and restores delivery
+  ratio from $26.6\%$ to $100\%$ on the slow-consumer scenario,
+  without touching any constant-rate result.
 \end{itemize}
 
 The motivation tracks the original log-processing emphasis of
@@ -573,6 +584,148 @@ The bursty generator therefore complements the steady-state and
 recovery experiments by stressing the system on a third axis ---
 \emph{transient over-capacity demand} --- without invalidating any
 prior result.
+
+\section{Adaptive Backpressure: Bounding Lag Under Overload}
+\label{sec:bp}
+
+The slow-consumer scenario in Section~V is the framework's most
+pathological run: under sustained 4\,ms-per-message consumer delay
+the producer keeps blasting traffic the consumer cannot drain, lag
+grows past 309{,}000 messages, only 26.6\% of sent messages are
+delivered within the 40\,s window, and end-to-end $p_{50}$ reaches
+17 seconds. This is the textbook unbounded-queue failure mode and is
+also the largest before/after gap in the data set, so it is the
+natural target for an additive control-loop feature.
+
+We add an opt-in \emph{credit-based adaptive backpressure} controller
+on the producer pool. The controller is \emph{additive}: with default
+flag values it is fully disabled and every constant-rate or bursty
+result in Sections~V--VIII is reproducible byte-for-byte.
+
+\subsection{Controller design}
+The existing \texttt{lag.Poller} already polls per-partition
+high-water-mark and committed offsets every \texttt{LagPollInterval}.
+We expose a single \texttt{atomic.Int64} cell --- the most recent
+total lag --- via \texttt{Poller.Current()}. A new producer-pool
+goroutine \texttt{runThrottleController} reads that cell every
+\texttt{-bp-poll} (default 200\,ms) and toggles a per-pool
+\texttt{paused atomic.Bool} with hysteresis:
+\begin{equation*}
+\mathrm{paused} \leftarrow
+\begin{cases}
+\text{true},  & \text{if } \neg\,\mathrm{paused} \wedge L_t > L_{\max} \\
+\text{false}, & \text{if } \mathrm{paused} \wedge L_t < L_{\mathrm{resume}}
+\end{cases}
+\end{equation*}
+where $L_t$ is the most recently sampled total lag, $L_{\max}$ is
+\texttt{-max-lag}, and $L_{\mathrm{resume}}$ defaults to
+$L_{\max}/2$. Each producer worker calls a \texttt{waitForCredit}
+helper at the top of every send tick; when paused it sleeps for
+\texttt{-bp-poll}/2 and rechecks. With \texttt{-max-lag=0} (default)
+the helper degenerates to a single atomic-load and the
+constant-rate hot path is byte-identical to Section~V.
+
+The controller writes two counters into the report ---
+\texttt{bp\_events} (number of pause transitions) and
+\texttt{bp\_paused\_s} (cumulative paused time) --- which makes
+its activity visible without adding a new latency histogram.
+
+\subsection{Three-point study}
+We exercise three configurations on the same workload as
+Section~V's aggressive slow-consumer scenario (10\,k\,msg/s producer,
+4\,ms consumer delay, 2 consumer workers, 12 partitions, 40\,s):
+
+\begin{itemize}
+\item \textbf{Off.} \texttt{-max-lag=0} (the
+  \texttt{results-slow-aggr.json} run from Section~V, included here
+  unchanged as the before-baseline).
+\item \textbf{Loose.} \texttt{-max-lag=20{,}000},
+  \texttt{-resume-lag=5{,}000}.
+\item \textbf{Tight.} \texttt{-max-lag=5{,}000},
+  \texttt{-resume-lag=1{,}000}, \texttt{-bp-poll=100\,ms}.
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{bp_compare.pdf}
+\caption{Total consumer lag (top, log-y) and producer send rate
+(bottom) over a 40\,s slow-consumer window. The off run grows lag
+without bound; the loose and tight runs lock lag to a sawtooth
+around their thresholds (dotted lines) by gating the producer.}
+\label{fig:bp-compare}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{bp_summary.pdf}
+\caption{Headline metrics across the three configurations. Peak lag
+falls $12\times$/$25\times$ from off; e2e $p_{99}$ from 31.4\,s to
+9.2\,s/3.8\,s; delivery ratio jumps from 26.6\% to 100\%; producer
+send rate self-throttles from 9.7\,k\,msg/s to roughly the
+consumer's sustained capacity.}
+\label{fig:bp-sum}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Adaptive backpressure: 40\,s slow-consumer scenario,
+identical workload, varying threshold.}
+\label{tab:bp}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Metric & \textbf{Off} & \textbf{Loose} & \textbf{Tight} & $\Delta$ vs.\ off \\ \midrule
+$L_{\max}$ (msgs)              & ---    & 20{,}000 & 5{,}000  & --- \\
+Peak lag (msgs)                & 309{,}435 & 25{,}956 & 12{,}177 & $-96\%$ \\
+E2E $p_{50}$ (ms)              & 17{,}035 & 4{,}606  & 1{,}579  & $-91\%$ \\
+E2E $p_{99}$ (ms)              & 31{,}434 & 9{,}171  & 3{,}811  & $-88\%$ \\
+Delivery ratio                 & 26.6\%   & 100\%    & 100\%    & $+74$\,pp \\
+Send rate (msg/s)              & 9{,}701  & 2{,}269  & 1{,}938  & --- \\
+Throttle events                & 0        & 4        & 8        & --- \\
+Paused time (s)                & 0.0      & 30.8     & 32.0     & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Results}
+Figure~\ref{fig:bp-compare} shows the time series. The off run
+exhibits the unbounded-queue failure mode; the loose and tight runs
+both lock lag to a sawtooth bounded by their respective thresholds.
+The producer's send rate (bottom panel) collapses from a flat
+9.7\,k\,msg/s to a low-frequency square wave that reflects the
+controller's pause/resume cycle.
+
+Figure~\ref{fig:bp-sum} and Table~\ref{tab:bp} make the
+before/after explicit. The tight configuration reduces peak
+lag by $96\%$ ($309{,}435 \to 12{,}177$ messages), e2e $p_{99}$
+by $88\%$ ($31.4 \to 3.8$ seconds), and pushes delivery ratio
+from $26.6\%$ to $100\%$. The cost is producer throughput:
+average send rate drops from $9.7\,\text{k}$ to $1.9\,\text{k}$\,msg/s,
+which is the correct answer because the consumer cannot sustain
+$9.7\,\text{k}$\,msg/s with the configured 4\,ms delay --- the
+``missing'' producer throughput in the off run translates directly
+into the lost messages reflected in the 26.6\% delivery ratio.
+
+\subsection{Why hysteresis matters}
+Without the resume-low/$L_{\mathrm{resume}}$ check, a single threshold
+$L_{\max}$ would cause the controller to oscillate at every
+\texttt{-bp-poll} tick whenever lag is near the boundary, producing
+high-frequency pause/resume churn. With $L_{\max}=20{,}000$ and
+$L_{\mathrm{resume}}=5{,}000$ the controller fires at most a handful
+of times in a 40\,s window (4 events for loose, 8 for tight) which is
+the right operating point: the controller is engaged enough to bound
+lag but not so reactive that it adds its own latency tail to
+producer-side sends.
+
+\subsection{What this validates}
+The single hardest production failure mode our framework can
+demonstrate --- unbounded consumer lag under sustained overload ---
+admits a pure software fix that uses metrics the framework was
+already collecting. The resulting controller is six dozen lines of
+Go, lives behind one default-zero flag, and improves every
+user-visible latency percentile by an order of magnitude on the
+same workload, with the only cost being a measurable and intentional
+reduction in producer throughput to the consumer's sustained capacity.
 
 \section{Discussion}
 

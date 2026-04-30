@@ -97,7 +97,7 @@ func main() {
 		fmt.Printf("\n[warmup] %s — results discarded\n", cfg.WarmupDuration)
 		col.Start()
 		warmupCtx, warmupCancel := context.WithTimeout(rootCtx, cfg.WarmupDuration)
-		runBench(warmupCtx, cfg, col, gen)
+		_ = runBench(warmupCtx, cfg, col, gen, lagPoll)
 		warmupCancel()
 		col.ResetAfterWarmup()
 		fmt.Println("[warmup] done — counters reset")
@@ -128,7 +128,7 @@ func main() {
 		}
 	}()
 
-	runBench(benchCtx, cfg, col, gen)
+	prodPool := runBench(benchCtx, cfg, col, gen, lagPoll)
 	col.MarkEnd() // freeze the bench window — everything after this is teardown
 	<-reporterDone
 
@@ -145,7 +145,13 @@ func main() {
 	spSamples := sp.Samples()
 	spSum := sp.Summary()
 
-	rep := output.Build(cfg, final, tl, lagSamples, lagSum, spSamples, spSum, compReport)
+	var bpEvents int64
+	var bpPaused time.Duration
+	if prodPool != nil {
+		bpEvents = prodPool.ThrottleEvents()
+		bpPaused = prodPool.ThrottlePaused()
+	}
+	rep := output.Build(cfg, final, tl, lagSamples, lagSum, spSamples, spSum, compReport, bpEvents, bpPaused)
 	output.PrintHuman(rep)
 
 	if cfg.JSONOutput || cfg.OutputFile != "" {
@@ -155,15 +161,20 @@ func main() {
 	}
 }
 
-func runBench(ctx context.Context, cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Generator) {
+// runBench runs one producer+consumer phase and returns the producer pool
+// so callers can read backpressure counters after the run. Pool is nil if
+// ConsumerOnly is set.
+func runBench(ctx context.Context, cfg *config.BenchConfig, col *metrics.Collector, gen *payload.Generator, lagPoll *lag.Poller) *producer.Pool {
 	var wg sync.WaitGroup
+	var prodPool *producer.Pool
 	if !cfg.ConsumerOnly {
-		pool, err := producer.NewPool(cfg, col, gen)
+		var err error
+		prodPool, err = producer.NewPool(cfg, col, gen, lagPoll)
 		if err != nil {
 			log.Fatalf("producer pool: %v", err)
 		}
 		wg.Add(1)
-		go func() { defer wg.Done(); pool.Run(ctx) }()
+		go func() { defer wg.Done(); prodPool.Run(ctx) }()
 	}
 	if !cfg.ProducerOnly {
 		pool, err := consumer.NewPool(cfg, col)
@@ -174,6 +185,7 @@ func runBench(ctx context.Context, cfg *config.BenchConfig, col *metrics.Collect
 		go func() { defer wg.Done(); pool.Run(ctx) }()
 	}
 	wg.Wait()
+	return prodPool
 }
 
 func printHeader() {
