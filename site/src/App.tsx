@@ -179,7 +179,7 @@ export default function App() {
           <h1>Kafka Bench Explorer</h1>
         </div>
         <nav className="header-links" aria-label="Project links">
-          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/4">
+          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/benchmark">
             Runner docs
           </a>
           <a href="https://github.com/Dd1235/SSP_kafka/tree/main/paper">

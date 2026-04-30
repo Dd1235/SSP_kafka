@@ -1,184 +1,123 @@
-# kafka-bench-v4
+# Kafka Benchmark Runner
 
-A modular Kafka benchmark in Go that fixes the consumer-side issues from the
-interim version and adds the metrics the project actually needs: end-to-end
-latency, consumer lag, backpressure behaviour, recovery after slowdown,
-offline compression ratios across realistic payloads, and runtime
-CPU/GC/memory sampling.
+Reproducible Kafka benchmark written in Go. It measures producer ack latency,
+end-to-end latency, consumer lag, recovery behavior, compression tradeoffs,
+runtime CPU/GC overhead, burst handling, and adaptive backpressure.
 
-Every moving part lives in a small package under `internal/`. To add a knob,
-add a payload class, or swap in a new metric, you touch exactly one file and
-the rest of the code keeps working.
-
----
-
-## Quick start
+## Quick Start
 
 ```bash
-# 1. build
 ./run.sh build
-
-# 2. start Kafka (KRaft, single-node, persistent)
 ./run.sh start
-
-# 3. 5-second smoke test
-./run.sh quick
-
-# 4. 30-second baseline bench
 ./run.sh bench
-
-# 5. slow-consumer scenario (builds lag)
-./run.sh slow-consumer
-
-# 6. recovery scenario (build lag then drain)
-./run.sh recovery
 ```
 
-Result JSONs are written to `results-*.json` alongside the binary.
+Result JSON files are written as `results-*.json`. The submitted dataset used
+by the dashboard lives in `../paper/data/`.
 
-The public GitHub Pages dashboard is a static viewer over the submitted result
-JSONs in `paper/data/`. To reproduce or extend the experiments locally, use the
-commands in this directory; to publish updated results, copy the new JSON files
-into `paper/data/` and rebuild the frontend from `site/`.
+## Experiments
 
----
+### Baseline
 
-## Directory layout
+Numbers: 9,924 msg/s sent, 9,925 msg/s received, 100.0% delivery, 30.8 ms e2e p99, 16.0 ms ack p99.
 
-```
-4/
-├── cmd/bench/main.go                # wiring only; no logic
-├── internal/
-│   ├── config/        # CLI flag definitions + BenchConfig struct
-│   ├── payload/       # random / zeros / text / json / logline / mixed
-│   ├── producer/      # sarama async producer pool
-│   ├── consumer/      # sarama consumer group pool + phased slowdown
-│   ├── lag/           # broker offsets vs committed offsets, recovery metrics
-│   ├── metrics/       # collector, percentiles, offline compression
-│   ├── sysperf/       # CPU / goroutines / heap / GC sampling
-│   ├── topic/         # ensure / reset
-│   └── output/        # JSON writer + pretty printer
-├── scenarios/                       # room for custom scenario scripts
-├── docker-compose.yml
-├── run.sh                           # preset scenarios
-├── go.mod / go.sum
-├── README.md                        # (this file)
-├── CHANGES.md                       # change log vs the interim version
-└── NEXT_PHASE.md                    # real-world application ideas
-```
+Explanation:
 
----
+### Compression Sweep
 
-## How to run custom benchmarks
+| Codec | Send rate | E2E p99 | Ack p99 | GC pause |
+| --- | ---: | ---: | ---: | ---: |
+| none | 9,728 msg/s | 17.9 ms | 11.1 ms | 4.1 ms |
+| snappy | 9,724 msg/s | 74.4 ms | 29.5 ms | 5.8 ms |
+| lz4 | 9,769 msg/s | 27.8 ms | 10.7 ms | 4.3 ms |
+| gzip | 9,844 msg/s | 22.4 ms | 12.2 ms | 3.3 ms |
+| zstd | 9,886 msg/s | 41.0 ms | 22.2 ms | 61.2 ms |
 
-Call the binary directly:
+Explanation:
+
+### Acks Sweep
+
+| Acks | Send rate | E2E p99 | Ack p99 | Delivery |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 9,404 msg/s | 13.9 ms | 7.0 ms | 100.0% |
+| 1 | 9,680 msg/s | 48.1 ms | 20.6 ms | 100.0% |
+| -1 | 9,763 msg/s | 11.7 ms | 8.1 ms | 100.0% |
+
+Explanation:
+
+### Payload Sweep
+
+| Payload | Send rate | E2E p99 | zstd ratio | snappy ratio |
+| --- | ---: | ---: | ---: | ---: |
+| random | 7,945 msg/s | 20.6 ms | 1.0x | 1.0x |
+| mixed | 7,962 msg/s | 17.3 ms | 4.5x | 3.8x |
+| json | 7,970 msg/s | 49.4 ms | 22.9x | 8.9x |
+| logline | 7,949 msg/s | 32.0 ms | 30.3x | 11.8x |
+| text | 7,979 msg/s | 48.3 ms | 2775.1x | 19.9x |
+| zeros | 7,924 msg/s | 45.2 ms | 8904.3x | 20.0x |
+
+Explanation:
+
+### Message Size Sweep
+
+| Size | Send rate | E2E p99 | Ack p99 |
+| --- | ---: | ---: | ---: |
+| 64 B | 7,918 msg/s | 41.3 ms | 9.8 ms |
+| 256 B | 7,922 msg/s | 11.3 ms | 6.7 ms |
+| 1024 B | 7,781 msg/s | 27.4 ms | 14.0 ms |
+| 4096 B | 7,861 msg/s | 28.7 ms | 15.8 ms |
+| 16384 B | 7,977 msg/s | 223.1 ms | 124.4 ms |
+
+Explanation:
+
+### Slow Consumer
+
+| Scenario | Send rate | Receive rate | Delivery | Peak lag | E2E p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| slow-consumer | 7,883 msg/s | 7,884 msg/s | 100.0% | 7,933 | 208.0 ms |
+| slow-aggressive | 9,701 msg/s | 2,579 msg/s | 26.6% | 309,435 | 31.4 s |
+
+Explanation:
+
+### Recovery
+
+| Scenario | Send rate | Peak lag | Drain rate | Time to drain | E2E p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| recovery | 7,791 msg/s | 7,911 | 12.9 msg/s | 30.0 s | 42.7 ms |
+| recovery-aggressive | 9,529 msg/s | 195,598 | 3,726 msg/s | 50.0 s | 19.7 s |
+
+Explanation:
+
+### Bursty Workload
+
+| Scenario | Send rate | Peak lag | E2E p99 | Delivery |
+| --- | ---: | ---: | ---: | ---: |
+| light | 7,454 msg/s | 14,575 | 15.3 ms | 100.0% |
+| heavy | 11,200 msg/s | 29,356 | 19.1 ms | 100.0% |
+| overload | 11,132 msg/s | 110,445 | 7.0 s | 107.2% |
+
+Explanation:
+
+### Adaptive Backpressure
+
+| Scenario | Send rate | Peak lag | E2E p99 | Delivery | Throttle |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| off | 9,701 msg/s | 309,435 | 31.4 s | 26.6% | 0 events |
+| loose | 2,269 msg/s | 25,956 | 9.2 s | 114.0% | 4 events / 30.8 s |
+| tight | 1,938 msg/s | 12,177 | 3.8 s | 103.6% | 8 events / 32.0 s |
+
+Explanation:
+
+## Custom Run
 
 ```bash
 ./bin/bench \
   -duration 60s \
-  -warmup 5s \
   -rate 20000 \
   -msg-size 1024 \
   -payload json \
-  -producers 8 \
-  -consumers 4 \
-  -partitions 12 \
-  -acks 1 \
   -compression zstd \
-  -consumer-delay 200us \
-  -consumer-jitter 100us \
-  -lag-interval 1s \
   -output my-run.json
 ```
 
-Every flag is listed by `./bin/bench -help`.
-
----
-
-## Recipes — what to change where
-
-| Want to…                                    | Touch                                                      |
-| ------------------------------------------- | ---------------------------------------------------------- |
-| Add a new CLI flag                          | `internal/config/config.go` (1 field, 1 `flag.*Var`)       |
-| Add a new payload class                     | `internal/payload/payload.go` (Mode + generator fn)        |
-| Add a new latency percentile                | `internal/metrics/percentiles.go`                          |
-| Add a new runtime metric (e.g. OS-level)    | `internal/sysperf/sysperf.go` (`Sample` field + `takeSample`) |
-| Change consumer-side slowdown behaviour     | `internal/consumer/consumer.go` (`phaser` / `ConsumeClaim`) |
-| Add a new preset scenario                   | `run.sh` (new `case`) — no Go changes needed               |
-| Add compression codec for offline analysis  | `internal/metrics/compression.go` (`codecs` map)           |
-| Export more fields to JSON                  | `internal/output/output.go` (struct field + Build())       |
-
----
-
-## Metrics captured
-
-### Latency
-Separate histograms for two meanings of latency:
-- **ack latency** — producer enqueue → broker ack (what the interim version measured)
-- **e2e latency** — producer enqueue → consumer receive (what the project goal requires)
-
-Each histogram reports: `min, p50, p75, p90, p95, p99, p99.5, p99.9, p99.99, max,
-mean, stddev, variance, MAD (median absolute deviation)`, plus log-bucketed
-CDF counts.
-
-### Throughput
-- Messages sent / received per second (instant & average)
-- Bytes/sec (payload, pre-compression)
-- Delivery ratio = received / sent
-- Error count (producer side)
-
-### Consumer lag
-- Per-partition and total lag at every `-lag-interval` tick
-- Peak lag, final lag
-- Drain rate (msg/s) if the run includes a recovery phase
-- Time-to-drain from peak
-
-### Compression (offline)
-Before the bench starts, 2000 sample payloads are compressed through
-`none / gzip / snappy / lz4 / zstd`. Report shows:
-- compressed size
-- compression ratio (raw / compressed)
-- space-saved %
-- encode time (µs)
-
-This works even with random payloads — random mode will show ratio ≈ 1.00
-for every codec, which is the correct answer. Use `-payload json` or
-`-payload text` to see realistic ratios.
-
-### SysPerf
-Sampled every `-sysperf-interval`:
-- CPU fraction (% of all cores, process-wide, via `runtime/metrics`)
-- Goroutine count
-- Heap alloc, heap in-use, stack in-use, total Sys memory (MB)
-- Number of GC cycles, total GC pause time, last pause (ms)
-
----
-
-## Scenarios in run.sh
-
-| Scenario           | What it does                                                   |
-| ------------------ | -------------------------------------------------------------- |
-| `quick`            | 5s sanity check                                                |
-| `bench`            | 30s, 10k msg/s, realistic payload mix                          |
-| `slow-consumer`    | Consumer has a 500µs/msg delay — lag grows throughout          |
-| `recovery`         | 30s with 800µs delay, then drop to 0 — measures drain         |
-| `sweep-compression`| Loops over `none/snappy/lz4/zstd/gzip`                         |
-| `sweep-acks`       | Loops over acks `0/1/-1`                                       |
-| `sweep-payload`    | Loops over payload classes — compression report varies         |
-| `sweep-msgsize`    | 64/256/1024/4096/16384-byte messages                           |
-
----
-
-## Known limitations
-
-- Single-node broker; replication, ISR, failover are out of scope.
-- `bytes_sent` is pre-compression payload size, not actual wire/disk bytes.
-  The offline compression report fills this gap for reasoning about codec choice.
-- E2E latency uses `time.Now()` on the same machine for producer and consumer
-  — no clock skew, but also means the numbers aren't cross-host-transferable.
-- SysPerf samples the **bench process**, not Kafka. If you want broker metrics,
-  pipe `docker stats kafka-bench-v4` alongside. Consider adding a Prometheus
-  exporter in a future phase.
-
-See [CHANGES.md](CHANGES.md) for the diff vs. the interim version and
-[NEXT_PHASE.md](NEXT_PHASE.md) for ideas on pointing this bench at a real-world task.
+Run `./bin/bench -help` for all flags.

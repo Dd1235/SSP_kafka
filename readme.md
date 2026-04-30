@@ -1,39 +1,33 @@
 # Kafka Bench Explorer
 
-Final course project for CSE-732 Software and Systems Performance.
+Go-based Apache Kafka benchmarking project focused on consumer lag, end-to-end
+latency, backpressure, recovery, payload compressibility, and runtime overhead.
 
-The final benchmark runner lives in `4/`. The paper source, generated plots,
-and canonical result JSON files live in `paper/`.
+## What This Includes
 
-## Public dashboard
+- `benchmark/` — reproducible Go benchmark runner with Docker Compose Kafka.
+- `paper/` — final report source, plots, and canonical benchmark JSON data.
+- `site/` — static React dashboard for exploring the results.
+- `old_experiments/` — earlier experiments, some for just picking up go
 
-The packaged frontend is a static GitHub Pages site:
+## Highlights
 
-https://dd1235.github.io/SSP_kafka/
+- Baseline: 9,924 msg/s with 30.8 ms p99 end-to-end latency.
+- Slow consumer stress: lag reached 309,435 messages.
+- Recovery test: drained a 195,598-message backlog at 3,726 msg/s.
+- Adaptive backpressure: reduced peak lag from 309,435 to 12,177 messages in the tight setting.
 
-It reads the existing benchmark reports from `paper/data/*.json`, builds a
-static `/data/index.json`, and exposes the raw result JSON files for download.
-It does not run Kafka in the browser.
+## Links
 
-## Local reproduction
+- Dashboard: https://dd1235.github.io/SSP_kafka/
+- Runner: `benchmark/README.md`
+- Paper: `paper/main.tex`
+- Will include the pdf on finalizing
+
+## Run Locally
 
 ```bash
 cd benchmark
 ./run.sh start
 ./run.sh bench
-./run.sh sweep-compression
 ```
-
-See `4/README.md` for the full runner guide and scenario list.
-
-## Frontend development
-
-```bash
-cd site
-pnpm install
-pnpm dev
-pnpm build
-```
-
-`pnpm build` regenerates `site/public/data/` from `paper/data/` before building
-the Vite app.
