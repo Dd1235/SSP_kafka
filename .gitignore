@@ -15,3 +15,4 @@ site/*.tsbuildinfo
 site/vite.config.d.ts
 site/vite.config.js
 CHANGES.md
+benchmark/results-*

@@ -18,7 +18,7 @@ It does not run Kafka in the browser.
 ## Local reproduction
 
 ```bash
-cd 4
+cd benchmark
 ./run.sh start
 ./run.sh bench
 ./run.sh sweep-compression

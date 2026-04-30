@@ -3,7 +3,14 @@ import { BarChart, LineChart } from "./charts";
 import type { BenchmarkReport, Category, RunIndex, RunInfo } from "./types";
 
 const DATA_ROOT = `${import.meta.env.BASE_URL}data/`;
-const COLORS = ["#2f6fed", "#0e8f68", "#d86422", "#8c5ccf", "#c93448", "#607d8b"];
+const COLORS = [
+  "#2f6fed",
+  "#0e8f68",
+  "#d86422",
+  "#8c5ccf",
+  "#c93448",
+  "#607d8b",
+];
 const CODECS = ["none", "snappy", "lz4", "gzip", "zstd"];
 
 async function loadJson<T>(file: string): Promise<T> {
@@ -53,7 +60,8 @@ function fmtSeconds(value: number | null | undefined) {
 
 function configValue(value: unknown) {
   if (Array.isArray(value)) return value.join(", ");
-  if (typeof value === "number") return fmt(value, Number.isInteger(value) ? 0 : 2);
+  if (typeof value === "number")
+    return fmt(value, Number.isInteger(value) ? 0 : 2);
   if (typeof value === "boolean") return value ? "true" : "false";
   if (value === null || value === undefined || value === "") return "n/a";
   return String(value);
@@ -64,10 +72,17 @@ function firstRunForCategory(runs: RunInfo[], categoryId: string) {
 }
 
 function useRunFromUrl() {
-  const [runId, setRunIdState] = useState(() => new URLSearchParams(window.location.search).get("run") ?? "results-bench");
+  const [runId, setRunIdState] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get("run") ?? "results-bench",
+  );
 
   useEffect(() => {
-    const onPop = () => setRunIdState(new URLSearchParams(window.location.search).get("run") ?? "results-bench");
+    const onPop = () =>
+      setRunIdState(
+        new URLSearchParams(window.location.search).get("run") ??
+          "results-bench",
+      );
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -112,7 +127,11 @@ export default function App() {
 
   const selected = useMemo(() => {
     if (!index) return null;
-    return index.runs.find((run) => run.id === runId) ?? index.runs.find((run) => run.id === "results-bench") ?? index.runs[0];
+    return (
+      index.runs.find((run) => run.id === runId) ??
+      index.runs.find((run) => run.id === "results-bench") ??
+      index.runs[0]
+    );
   }, [index, runId]);
 
   useEffect(() => {
@@ -142,7 +161,12 @@ export default function App() {
   }
 
   if (error || !index || !selected) {
-    return <StatusScreen title="Unable to load explorer" detail={error ?? "Missing index data."} />;
+    return (
+      <StatusScreen
+        title="Unable to load explorer"
+        detail={error ?? "Missing index data."}
+      />
+    );
   }
 
   const activeCategory = selected.category;
@@ -155,8 +179,12 @@ export default function App() {
           <h1>Kafka Bench Explorer</h1>
         </div>
         <nav className="header-links" aria-label="Project links">
-          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/4">Runner docs</a>
-          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/paper">Paper source</a>
+          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/4">
+            Runner docs
+          </a>
+          <a href="https://github.com/Dd1235/SSP_kafka/tree/main/paper">
+            Paper source
+          </a>
           <a href={`${DATA_ROOT}index.json`}>Data index</a>
         </nav>
       </header>
@@ -172,11 +200,20 @@ export default function App() {
               if (next) setRunId(next.id);
             }}
           />
-          <RunList runs={index.runs} activeRunId={selected.id} activeCategory={activeCategory} onSelect={setRunId} />
+          <RunList
+            runs={index.runs}
+            activeRunId={selected.id}
+            activeCategory={activeCategory}
+            onSelect={setRunId}
+          />
         </aside>
 
         <main className="content">
-          <Overview runs={index.runs} generatedAt={index.generatedAt} onSelect={setRunId} />
+          <Overview
+            runs={index.runs}
+            generatedAt={index.generatedAt}
+            onSelect={setRunId}
+          />
           {reportLoading || !report ? (
             <StatusPanel title="Loading selected run" />
           ) : (
@@ -219,7 +256,11 @@ function CategoryTabs({
   onSelectCategory: (categoryId: string) => void;
 }) {
   return (
-    <div className="category-tabs" role="tablist" aria-label="Result categories">
+    <div
+      className="category-tabs"
+      role="tablist"
+      aria-label="Result categories"
+    >
       {categories
         .filter((category) => runs.some((run) => run.category === category.id))
         .map((category) => (
@@ -251,7 +292,12 @@ function RunList({
   return (
     <div className="run-list">
       {visible.map((run) => (
-        <button key={run.id} className={run.id === activeRunId ? "active" : ""} type="button" onClick={() => onSelect(run.id)}>
+        <button
+          key={run.id}
+          className={run.id === activeRunId ? "active" : ""}
+          type="button"
+          onClick={() => onSelect(run.id)}
+        >
           <span>{run.label}</span>
           <small>
             {fmtRate(run.summary.avgRate)} · p99 {fmtMs(run.summary.e2eP99)}
@@ -262,7 +308,15 @@ function RunList({
   );
 }
 
-function Overview({ runs, generatedAt, onSelect }: { runs: RunInfo[]; generatedAt: string; onSelect: (runId: string) => void }) {
+function Overview({
+  runs,
+  generatedAt,
+  onSelect,
+}: {
+  runs: RunInfo[];
+  generatedAt: string;
+  onSelect: (runId: string) => void;
+}) {
   const baseline = runs.find((run) => run.id === "results-bench");
   const worstP99 = runs.reduce<RunInfo | null>((best, run) => {
     if (typeof run.summary.e2eP99 !== "number") return best;
@@ -282,11 +336,21 @@ function Overview({ runs, generatedAt, onSelect }: { runs: RunInfo[]; generatedA
           <p className="eyebrow">Static results dashboard</p>
           <h2>Runs, sweeps, and raw reports</h2>
         </div>
-        <p className="muted">Generated from paper/data on {new Date(generatedAt).toLocaleString()}.</p>
+        <p className="muted">
+          Generated from paper/data on {new Date(generatedAt).toLocaleString()}.
+        </p>
       </div>
       <div className="metric-grid">
-        <MetricCard label="Reports" value={String(runs.length)} detail="JSON files packaged for GitHub Pages" />
-        <MetricCard label="Baseline rate" value={fmtRate(baseline?.summary.avgRate)} detail="Healthy mixed-payload run" />
+        <MetricCard
+          label="Reports"
+          value={String(runs.length)}
+          detail="JSON files packaged for GitHub Pages"
+        />
+        <MetricCard
+          label="Baseline rate"
+          value={fmtRate(baseline?.summary.avgRate)}
+          detail="Healthy mixed-payload run"
+        />
         <MetricCard
           label="Worst e2e p99"
           value={fmtMs(worstP99?.summary.e2eP99)}
@@ -338,7 +402,17 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
   const sysperf = report.sysperf_timeline ?? [];
   const rawUrl = `${DATA_ROOT}${run.file}`;
   const configEntries = Object.entries(report.config).filter(([key]) =>
-    ["target_rate", "message_size", "payload_mode", "compression", "acks", "producers", "consumers", "partitions", "consumer_delay"].includes(key),
+    [
+      "target_rate",
+      "message_size",
+      "payload_mode",
+      "compression",
+      "acks",
+      "producers",
+      "consumers",
+      "partitions",
+      "consumer_delay",
+    ].includes(key),
   );
 
   return (
@@ -354,10 +428,26 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
       </div>
 
       <div className="metric-grid compact">
-        <MetricCard label="Sent" value={compact(report.final.messages_sent, 2)} detail={fmtRate(report.final.avg_rate_msg_per_sec)} />
-        <MetricCard label="Received" value={compact(report.final.messages_received, 2)} detail={fmtPct(run.summary.deliveryPct)} />
-        <MetricCard label="E2E p99" value={fmtMs(report.final.e2e_latency_ms.P99)} detail={`p50 ${fmtMs(report.final.e2e_latency_ms.P50)}`} />
-        <MetricCard label="Peak lag" value={`${compact(run.summary.peakLag, 2)} msgs`} detail={`final ${compact(run.summary.finalLag, 2)}`} />
+        <MetricCard
+          label="Sent"
+          value={compact(report.final.messages_sent, 2)}
+          detail={fmtRate(report.final.avg_rate_msg_per_sec)}
+        />
+        <MetricCard
+          label="Received"
+          value={compact(report.final.messages_received, 2)}
+          detail={fmtPct(run.summary.deliveryPct)}
+        />
+        <MetricCard
+          label="E2E p99"
+          value={fmtMs(report.final.e2e_latency_ms.P99)}
+          detail={`p50 ${fmtMs(report.final.e2e_latency_ms.P50)}`}
+        />
+        <MetricCard
+          label="Peak lag"
+          value={`${compact(run.summary.peakLag, 2)} msgs`}
+          detail={`final ${compact(run.summary.finalLag, 2)}`}
+        />
       </div>
 
       <div className="chart-grid">
@@ -368,12 +458,18 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
             {
               label: "sent",
               color: COLORS[0],
-              values: timeline.map((point) => ({ x: point.elapsed_s, y: point.inst_rate / 1000 })),
+              values: timeline.map((point) => ({
+                x: point.elapsed_s,
+                y: point.inst_rate / 1000,
+              })),
             },
             {
               label: "received",
               color: COLORS[1],
-              values: timeline.map((point) => ({ x: point.elapsed_s, y: point.recv_rate / 1000 })),
+              values: timeline.map((point) => ({
+                x: point.elapsed_s,
+                y: point.recv_rate / 1000,
+              })),
             },
           ]}
         />
@@ -384,12 +480,18 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
             {
               label: "e2e p50",
               color: COLORS[1],
-              values: timeline.map((point) => ({ x: point.elapsed_s, y: point.e2e_p50_ms })),
+              values: timeline.map((point) => ({
+                x: point.elapsed_s,
+                y: point.e2e_p50_ms,
+              })),
             },
             {
               label: "e2e p99",
               color: COLORS[4],
-              values: timeline.map((point) => ({ x: point.elapsed_s, y: point.e2e_p99_ms })),
+              values: timeline.map((point) => ({
+                x: point.elapsed_s,
+                y: point.e2e_p99_ms,
+              })),
             },
           ]}
         />
@@ -401,7 +503,10 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
               {
                 label: "total lag",
                 color: COLORS[4],
-                values: lag.map((point) => ({ x: point.elapsed_s, y: point.total_lag / 1000 })),
+                values: lag.map((point) => ({
+                  x: point.elapsed_s,
+                  y: point.total_lag / 1000,
+                })),
               },
             ]}
           />
@@ -414,7 +519,10 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
               {
                 label: "cpu",
                 color: COLORS[3],
-                values: sysperf.map((point) => ({ x: point.elapsed_s, y: point.cpu_fraction_pct })),
+                values: sysperf.map((point) => ({
+                  x: point.elapsed_s,
+                  y: point.cpu_fraction_pct,
+                })),
               },
             ]}
           />
@@ -440,7 +548,13 @@ function RunDetail({ run, report }: { run: RunInfo; report: BenchmarkReport }) {
   );
 }
 
-function LatencyTable({ title, report }: { title: string; report: BenchmarkReport }) {
+function LatencyTable({
+  title,
+  report,
+}: {
+  title: string;
+  report: BenchmarkReport;
+}) {
   const rows = [
     ["Ack", report.final.ack_latency_ms],
     ["E2E", report.final.e2e_latency_ms],
@@ -477,7 +591,9 @@ function LatencyTable({ title, report }: { title: string; report: BenchmarkRepor
 }
 
 function CompressionTable({ report }: { report: BenchmarkReport }) {
-  const codecs = Object.entries(report.compression_offline?.codecs ?? {}).sort(([a], [b]) => CODECS.indexOf(a) - CODECS.indexOf(b));
+  const codecs = Object.entries(report.compression_offline?.codecs ?? {}).sort(
+    ([a], [b]) => CODECS.indexOf(a) - CODECS.indexOf(b),
+  );
   return (
     <div className="mini-panel">
       <h3>Offline compression</h3>
@@ -507,13 +623,24 @@ function CompressionTable({ report }: { report: BenchmarkReport }) {
   );
 }
 
-function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (runId: string) => void }) {
-  const byCategory = (category: string) => runs.filter((run) => run.category === category);
+function ComparisonSections({
+  runs,
+  onSelect,
+}: {
+  runs: RunInfo[];
+  onSelect: (runId: string) => void;
+}) {
+  const byCategory = (category: string) =>
+    runs.filter((run) => run.category === category);
   const compression = byCategory("compression");
   const payload = byCategory("payload");
   const lagRecovery = byCategory("lag-recovery");
   const bursty = byCategory("bursty");
-  const backpressure = ["results-slow-aggr", "results-bp-on", "results-bp-tight"]
+  const backpressure = [
+    "results-slow-aggr",
+    "results-bp-on",
+    "results-bp-tight",
+  ]
     .map((id) => runs.find((run) => run.id === id))
     .filter((run): run is RunInfo => Boolean(run));
   const acks = byCategory("acks");
@@ -551,7 +678,9 @@ function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (ru
           title="Payload sweep: zstd ratio"
           unit="x"
           data={payload.map((run, index) => ({
-            label: String(run.config.payload_mode ?? run.label.replace("Payload: ", "")),
+            label: String(
+              run.config.payload_mode ?? run.label.replace("Payload: ", ""),
+            ),
             value: run.summary.compressionRatios.zstd,
             color: COLORS[index % COLORS.length],
           }))}
@@ -570,7 +699,8 @@ function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (ru
           unit="k"
           data={lagRecovery.map((run, index) => ({
             label: shortScenarioLabel(run),
-            value: run.summary.peakLag === null ? null : run.summary.peakLag / 1000,
+            value:
+              run.summary.peakLag === null ? null : run.summary.peakLag / 1000,
             color: COLORS[index % COLORS.length],
           }))}
         />
@@ -579,7 +709,8 @@ function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (ru
           unit="s"
           data={bursty.map((run, index) => ({
             label: run.label.replace("Bursty: ", ""),
-            value: run.summary.e2eP99 === null ? null : run.summary.e2eP99 / 1000,
+            value:
+              run.summary.e2eP99 === null ? null : run.summary.e2eP99 / 1000,
             color: COLORS[index % COLORS.length],
           }))}
         />
@@ -587,8 +718,12 @@ function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (ru
           title="Adaptive backpressure: peak lag"
           unit="k"
           data={backpressure.map((run, index) => ({
-            label: run.id === "results-slow-aggr" ? "off" : run.label.replace("Backpressure: ", ""),
-            value: run.summary.peakLag === null ? null : run.summary.peakLag / 1000,
+            label:
+              run.id === "results-slow-aggr"
+                ? "off"
+                : run.label.replace("Backpressure: ", ""),
+            value:
+              run.summary.peakLag === null ? null : run.summary.peakLag / 1000,
             color: COLORS[index % COLORS.length],
           }))}
         />
@@ -603,7 +738,17 @@ function ComparisonSections({ runs, onSelect }: { runs: RunInfo[]; onSelect: (ru
         />
       </div>
 
-      <RunMatrix title="Quick comparison" runs={[...compression, ...payload, ...lagRecovery, ...bursty, ...backpressure]} onSelect={onSelect} />
+      <RunMatrix
+        title="Quick comparison"
+        runs={[
+          ...compression,
+          ...payload,
+          ...lagRecovery,
+          ...bursty,
+          ...backpressure,
+        ]}
+        onSelect={onSelect}
+      />
     </section>
   );
 }
@@ -621,7 +766,15 @@ function shortScenarioLabel(run: RunInfo) {
     .replace("Recovery", "recovery");
 }
 
-function RunMatrix({ title, runs, onSelect }: { title: string; runs: RunInfo[]; onSelect: (runId: string) => void }) {
+function RunMatrix({
+  title,
+  runs,
+  onSelect,
+}: {
+  title: string;
+  runs: RunInfo[];
+  onSelect: (runId: string) => void;
+}) {
   return (
     <div className="mini-panel full-span">
       <h3>{title}</h3>
@@ -640,7 +793,11 @@ function RunMatrix({ title, runs, onSelect }: { title: string; runs: RunInfo[]; 
             {runs.map((run) => (
               <tr key={run.id}>
                 <td>
-                  <button className="table-action" type="button" onClick={() => onSelect(run.id)}>
+                  <button
+                    className="table-action"
+                    type="button"
+                    onClick={() => onSelect(run.id)}
+                  >
                     {run.label}
                   </button>
                 </td>
@@ -667,14 +824,14 @@ function ReproductionPanel() {
         </div>
       </div>
       <div className="command-grid">
-        <code>cd 4</code>
+        <code>cd benchmark</code>
         <code>./run.sh start</code>
         <code>./run.sh bench</code>
         <code>./run.sh sweep-compression</code>
       </div>
       <p className="muted">
-        GitHub Pages hosts the explorer and result files only. Kafka runs locally through Docker Compose and the Go CLI in the
-        repository.
+        GitHub Pages hosts the explorer and result files only. Kafka runs
+        locally through Docker Compose and the Go CLI in the repository.
       </p>
     </section>
   );
