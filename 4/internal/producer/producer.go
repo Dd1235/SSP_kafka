@@ -61,13 +61,30 @@ func (p *Pool) Run(ctx context.Context) {
 	}
 	intervalNs := int64(float64(time.Second) / ratePerWorker)
 
+	bursty := p.cfg.BurstRate > 0 && p.cfg.BurstDuration > 0 && p.cfg.BurstPeriod > 0
+	var burstIntervalNs int64
+	if bursty {
+		burstPerWorker := float64(p.cfg.BurstRate) / float64(p.cfg.ProducerWorkers)
+		if burstPerWorker < 1 {
+			burstPerWorker = 1
+		}
+		burstIntervalNs = int64(float64(time.Second) / burstPerWorker)
+	}
+
 	var wg sync.WaitGroup
 	for i, prod := range p.producers {
 		wg.Add(2)
-		go func(id int, prod sarama.AsyncProducer) {
-			defer wg.Done()
-			p.runSender(ctx, id, prod, intervalNs)
-		}(i, prod)
+		if bursty {
+			go func(id int, prod sarama.AsyncProducer) {
+				defer wg.Done()
+				p.runBurstySender(ctx, id, prod, intervalNs, burstIntervalNs)
+			}(i, prod)
+		} else {
+			go func(id int, prod sarama.AsyncProducer) {
+				defer wg.Done()
+				p.runSender(ctx, id, prod, intervalNs)
+			}(i, prod)
+		}
 		go func(prod sarama.AsyncProducer) {
 			defer wg.Done()
 			p.runAckReader(ctx, prod)
@@ -112,6 +129,83 @@ func (p *Pool) runSender(ctx context.Context, id int, prod sarama.AsyncProducer,
 				return
 			}
 		}
+	}
+}
+
+// runBurstySender alternates between baseIntervalNs and burstIntervalNs in a
+// duty cycle defined by cfg.BurstDuration / cfg.BurstPeriod. Default config
+// values do not enter this path; existing constant-rate runs are unaffected.
+//
+// Implementation note: a fresh ticker is created on each phase change. This
+// is cheaper than retuning a running ticker, and the maximum tickers per
+// second is BurstPeriod^-1 (typically O(0.1 Hz)).
+func (p *Pool) runBurstySender(ctx context.Context, id int, prod sarama.AsyncProducer,
+	baseIntervalNs, burstIntervalNs int64) {
+
+	workerID := uint32(id)
+	var seq uint32
+
+	emit := func() bool {
+		msg := make([]byte, p.cfg.MessageSize)
+		p.gen.Next(msg, uint64(workerID)<<32|uint64(seq))
+		now := time.Now()
+		payload.WriteHeader(msg, workerID, seq, now.UnixNano())
+		seq++
+		pm := &sarama.ProducerMessage{
+			Topic:    p.cfg.Topic,
+			Value:    sarama.ByteEncoder(msg),
+			Metadata: inFlight{enqueuedAt: now},
+		}
+		select {
+		case prod.Input() <- pm:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	// One burst cycle = on-window then off-window. We schedule against the
+	// pool's start-time so all workers stay phase-aligned.
+	startNs := time.Now().UnixNano()
+	periodNs := p.cfg.BurstPeriod.Nanoseconds()
+	onNs := p.cfg.BurstDuration.Nanoseconds()
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		// Determine current phase based on time since start.
+		elapsed := time.Now().UnixNano() - startNs
+		offset := elapsed % periodNs
+		var intervalNs int64
+		var until int64
+		if offset < onNs {
+			intervalNs = burstIntervalNs
+			until = onNs - offset
+		} else {
+			intervalNs = baseIntervalNs
+			until = periodNs - offset
+		}
+
+		ticker := time.NewTicker(time.Duration(intervalNs))
+		phaseEnd := time.Now().Add(time.Duration(until))
+	phaseLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				if !emit() {
+					ticker.Stop()
+					return
+				}
+				if time.Now().After(phaseEnd) {
+					break phaseLoop
+				}
+			}
+		}
+		ticker.Stop()
 	}
 }
 

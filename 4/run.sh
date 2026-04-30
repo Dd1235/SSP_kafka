@@ -157,6 +157,34 @@ case "$CMD" in
     done
     ;;
 
+  # Bursty workload — periodic spikes that the system must absorb.
+  # Two presets: light (system absorbs) and heavy (each burst exceeds drain capacity).
+  bursty-light)
+    build; kafka_up
+    "$BIN" \
+      -duration 60s -warmup 3s \
+      -rate 5000 -burst-rate 15000 -burst-duration 3s -burst-period 12s \
+      -msg-size 512 \
+      -producers 8 -consumers 4 -partitions 12 \
+      -acks 1 -compression snappy \
+      -payload json \
+      -report-interval 1s -lag-interval 1s \
+      -output results-bursty-light.json
+    ;;
+
+  bursty-heavy)
+    build; kafka_up
+    "$BIN" \
+      -duration 60s -warmup 3s \
+      -rate 5000 -burst-rate 30000 -burst-duration 3s -burst-period 12s \
+      -msg-size 512 \
+      -producers 8 -consumers 4 -partitions 12 \
+      -acks 1 -compression snappy \
+      -payload json \
+      -report-interval 1s -lag-interval 1s \
+      -output results-bursty-heavy.json
+    ;;
+
   reset-topic)
     docker compose exec kafka kafka-topics \
       --bootstrap-server localhost:9092 \

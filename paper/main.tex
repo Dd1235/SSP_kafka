@@ -51,7 +51,12 @@ to 17 seconds; and a recovery scenario where, after the bottleneck is
 removed, the consumer drains a 196{,}000-message backlog at
 3{,}726\,msg/s in 50 s. We further use the captured GC timeline to
 explain why zstd produces a $20\times$ jump in GC pause time despite
-similar $p_{99}$ latency. The paper closes with a discussion of next
+similar $p_{99}$ latency. Finally, an additive bursty workload
+generator characterises a third operating regime ---
+\emph{transient over-capacity demand} --- locating the absorption
+boundary between bursts the consumer can drain in the off-window
+($p_{99} \le 19$\,ms) and bursts that saturate it
+($p_{99} = 6.97$\,s). The paper closes with a discussion of next
 steps that point the same measurement apparatus at a real workload.
 \end{abstract}
 
@@ -102,6 +107,11 @@ deployment.
   zstd's tail-latency advantage over snappy on realistic payloads
   comes at the cost of a $\sim$$16\times$ increase in producer-side GC
   pressure.
+\item An opt-in bursty workload generator and a three-point study
+  (Section~\ref{sec:bursty}) that locates the absorption boundary
+  between bursts the system handles transparently and bursts that
+  push end-to-end $p_{99}$ into the multi-second regime, without
+  altering any constant-rate result.
 \end{itemize}
 
 The motivation tracks the original log-processing emphasis of
@@ -461,6 +471,108 @@ a stuck-in-backlog mode); unbounded slow-consumer is fully shifted to
 the multi-second regime.}
 \label{fig:cdf}
 \end{figure}
+
+\section{Bursty Workloads: Absorption and Saturation}
+\label{sec:bursty}
+
+The experiments to this point use a constant producer rate. Real
+Kafka traffic is rarely constant: deployments emit synchronous
+spikes, retry storms multiply send rate transiently, and consumer
+restarts produce short windows of catch-up demand. To characterise
+how the framework reacts to transient overload we add an opt-in
+bursty workload generator and report three new runs that share the
+same broker, payload, and consumer pool but vary in burst magnitude
+and consumer headroom. This section is purely additive to the
+results in Sections~V--VII; constant-rate runs are unchanged because
+the bursty path is gated behind \texttt{-burst-rate>0} and the
+default flag values reproduce the original configuration bit-for-bit.
+
+\subsection{Generator design}
+Three new flags --- \texttt{-burst-rate},
+\texttt{-burst-duration}, \texttt{-burst-period} --- enable a
+periodic on/off duty cycle. Each producer worker checks the
+phase-aligned offset within the period at the start of every cycle
+and reconfigures its ticker between
+$T_{\text{base}} = R_{\text{base}}^{-1}$ and
+$T_{\text{burst}} = R_{\text{burst}}^{-1}$. All workers stay in
+phase because they reference a shared start-time. The
+existing per-interval rate counter in
+Section~\ref{sec:fixes} already records instantaneous send rate, so
+no new metric is required.
+
+\subsection{Three regimes}
+We hold base rate at 5{,}000\,msg/s and burst duration at 3\,s, with
+a period of 12\,s (i.e.\ the burst is on 25\% of the time). The
+three runs differ in burst magnitude and consumer pressure:
+\begin{itemize}
+\item \textbf{Light.} Burst rate 15{,}000\,msg/s, 4 consumers, no
+processing delay.
+\item \textbf{Heavy.} Burst rate 30{,}000\,msg/s, 4 consumers, no
+processing delay.
+\item \textbf{Overload.} Burst rate 30{,}000\,msg/s, 2 consumers,
+800\,$\mu$s per-message processing delay (so the consumer's effective
+sustained throughput drops below the time-averaged producer rate).
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{bursty_timeline.pdf}
+\caption{Three bursty runs, 60\,s each, 5\,k baseline and 3\,s
+on / 9\,s off duty cycle. Panels (top to bottom): instantaneous
+send rate, total consumer lag, and e2e $p_{99}$ on log-y. The light
+and heavy runs absorb every burst within the 9\,s off-window
+($p_{99} \le 19$\,ms throughout); the overload run accumulates
+unfinished work and pushes $p_{99}$ into the multi-second regime.}
+\label{fig:burst-tl}
+\end{figure}
+
+\subsection{Absorption boundary}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{bursty_summary.pdf}
+\caption{Per-burst peak lag (mean over all bursts and overall), and
+mean off-burst trough lag, across the three runs. Light and heavy
+recover to within 5\,k of the constant-rate floor before the next
+burst arrives; overload's mean trough is $\sim$$8\times$ the floor and
+its overall peak is $7.5\times$ the heavy peak.}
+\label{fig:burst-sum}
+\end{figure}
+
+Figure~\ref{fig:burst-tl} shows that the rate signal cleanly tracks
+the configured duty cycle for all three runs. The lag panel shows
+the absorption boundary directly. In the light and heavy runs total
+lag spikes during each burst (peak 14{,}575 and 29{,}356 respectively)
+then decays to within 100--200 messages of the off-burst floor before
+the next burst arrives; the off-burst window provides ample drain
+capacity. End-to-end $p_{99}$ in these regimes stays below 20\,ms
+throughout, confirming that bursts of $3\times$ and $6\times$
+the baseline rate are absorbed with no observable user-visible tail
+penalty.
+
+The overload run flips the picture. The 800\,$\mu$s consumer delay
+caps sustained processing capacity below the time-averaged producer
+rate (5\,k baseline + 3\,s of 30\,k = 11.25\,k\,msg/s on average; the
+delayed consumer pool sustains $\approx$10\,k\,msg/s). Each
+burst pushes lag to a peak of 110{,}445 messages; the consumer
+drains during the 9\,s off-window but trails into the next burst
+with non-zero residual lag. The mean off-burst trough is
+$\sim$41{,}000 messages versus $\sim$4{,}800 for the absorbed
+regimes. End-to-end $p_{99}$ reaches 6.97\,s, with $p_{50}$
+stuck above 2\,s --- the worst tail in the entire study.
+
+\subsection{Implications}
+The boundary between absorption and saturation is not the burst
+peak but the time-averaged demand against the consumer's sustained
+capacity. Heavy ($30\,\text{k}\times 0.25 + 5\,\text{k}\times 0.75 =
+11.25\,\text{k}$\,msg/s) is absorbed because the no-delay consumer
+pool sustains well above 11\,k\,msg/s; overload, with the same
+arithmetic but a delayed consumer, is not. Plain constant-rate
+benchmarks miss this entirely: a 60\,s constant 11\,k\,msg/s run
+would never expose the 110\,k transient lag this scenario produces.
+The bursty generator therefore complements the steady-state and
+recovery experiments by stressing the system on a third axis ---
+\emph{transient over-capacity demand} --- without invalidating any
+prior result.
 
 \section{Discussion}
 

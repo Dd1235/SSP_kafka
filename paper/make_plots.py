@@ -272,6 +272,91 @@ def plot_sysperf_gc():
     plt.close(fig)
 
 
+# 10. Bursty workload — three-panel: rate, lag, e2e p99
+def plot_bursty_panel():
+    runs = [
+        ("results-bursty-light.json",    "light  (5k → 15k)",    "#4c72b0"),
+        ("results-bursty-heavy.json",    "heavy  (5k → 30k)",    "#dd8452"),
+        ("results-bursty-overload.json", "overload (30k + 800µs delay)", "#c44e52"),
+    ]
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(5.4, 4.8), sharex=True)
+    for name, label, color in runs:
+        d = load(name)
+        tl = d["timeline"]; lg = d["lag_timeline"]
+        t = [s["elapsed_s"] for s in tl]
+        sent = [s["inst_rate"]/1000 for s in tl]
+        e99 = [s["e2e_p99_ms"] for s in tl]
+        lt = [s["elapsed_s"] for s in lg]
+        L  = [s["total_lag"]/1000 for s in lg]
+        ax1.plot(t, sent, "-", color=color, lw=1.0, label=label)
+        ax2.plot(lt, L, "-", color=color, lw=1.0)
+        ax3.semilogy([s["elapsed_s"] for s in tl if s["e2e_p99_ms"]>0],
+                     [s["e2e_p99_ms"] for s in tl if s["e2e_p99_ms"]>0],
+                     "-", color=color, lw=1.0)
+    ax1.set_ylabel("Send rate\n(k msg/s)")
+    ax1.legend(fontsize=7, loc="upper right", ncol=3)
+    ax1.set_ylim(0, 35)
+    ax2.set_ylabel("Total lag\n(k msgs)")
+    ax3.set_ylabel("E2E p99\n(ms, log)")
+    ax3.set_xlabel("Elapsed time (s)")
+    ax3.set_ylim(1, 1e5)
+    fig.tight_layout()
+    fig.savefig(os.path.join(ASSETS, "bursty_timeline.pdf"))
+    plt.close(fig)
+
+
+# 11. Bursty: per-burst peak-lag bar + drain margin
+def plot_bursty_summary():
+    import re
+    runs = [
+        ("results-bursty-light.json",    "light"),
+        ("results-bursty-heavy.json",    "heavy"),
+        ("results-bursty-overload.json", "overload"),
+    ]
+    # For each run, identify each burst window via the rate timeline and
+    # compute (a) peak lag during burst, (b) lag at end of off-window.
+    fig, ax = plt.subplots(figsize=(5.0, 2.6))
+    width = 0.27
+    labels = []
+    peak_means, peak_max = [], []
+    trough_means = []
+    for name, lbl in runs:
+        d = load(name)
+        cfg = d["config"]
+        # Burst period e.g. "12s"
+        period = float(re.match(r"([\d.]+)", cfg["burst_period"]).group(1))
+        burst_dur = float(re.match(r"([\d.]+)", cfg["burst_duration"]).group(1))
+        lg = d["lag_timeline"]
+        # Find each burst's peak (within [k*period, k*period + burst_dur + 1])
+        peaks = []; troughs = []
+        for k in range(20):
+            t0 = k*period; t1 = k*period + burst_dur + 1.0
+            in_burst = [s["total_lag"] for s in lg if t0 <= s["elapsed_s"] <= t1]
+            in_off = [s["total_lag"] for s in lg if t0 + burst_dur + 1 <= s["elapsed_s"] < t0 + period]
+            if in_burst:
+                peaks.append(max(in_burst))
+            if in_off:
+                troughs.append(min(in_off))
+        if not peaks:
+            continue
+        labels.append(lbl)
+        peak_means.append(sum(peaks)/len(peaks)/1000)
+        peak_max.append(max(peaks)/1000)
+        trough_means.append(sum(troughs)/len(troughs)/1000 if troughs else 0)
+    x = np.arange(len(labels))
+    ax.bar(x - width, peak_means, width, label="mean per-burst peak", color="#dd8452")
+    ax.bar(x, peak_max, width, label="overall peak", color="#c44e52")
+    ax.bar(x + width, trough_means, width, label="mean off-burst trough", color="#4c72b0")
+    ax.set_xticks(x); ax.set_xticklabels(labels)
+    ax.set_ylabel("Total lag (k msgs)")
+    ax.legend(fontsize=7, loc="upper left")
+    for i, v in enumerate(peak_max):
+        ax.text(i, v + 3, f"{v:.0f}k", ha="center", fontsize=7)
+    fig.tight_layout()
+    fig.savefig(os.path.join(ASSETS, "bursty_summary.pdf"))
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     plot_baseline_timeline()
     plot_compression_sweep()
@@ -282,4 +367,6 @@ if __name__ == "__main__":
     plot_recovery()
     plot_e2e_cdf()
     plot_sysperf_gc()
+    plot_bursty_panel()
+    plot_bursty_summary()
     print("All plots written to", ASSETS)

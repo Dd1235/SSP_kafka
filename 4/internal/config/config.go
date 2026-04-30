@@ -31,6 +31,16 @@ type BenchConfig struct {
 	WarmupDuration time.Duration
 	Partitions    int
 
+	// --- Bursty workload (optional, off by default) ---
+	// When BurstRate > 0 and BurstDuration > 0 and BurstPeriod > 0, the
+	// producer alternates between TargetRate (off-burst) and BurstRate
+	// (during burst) on a periodic cycle: BurstDuration "on" then
+	// (BurstPeriod - BurstDuration) "off". Default zero values preserve
+	// the original constant-rate behaviour exactly.
+	BurstRate     int
+	BurstDuration time.Duration
+	BurstPeriod   time.Duration
+
 	// --- Producer tuning ---
 	ProducerWorkers int
 	BatchBytes      int    // Sarama Producer.Flush.Bytes (true batch threshold)
@@ -96,6 +106,13 @@ func Parse() *BenchConfig {
 	flag.DurationVar(&c.PhaseDelay, "phase-delay", 0,
 		"Consumer delay after phase switch (e.g. set to 0 to drain backlog)")
 
+	flag.IntVar(&c.BurstRate, "burst-rate", 0,
+		"Peak msgs/sec during burst (>0 enables bursty mode; default 0 = constant rate)")
+	flag.DurationVar(&c.BurstDuration, "burst-duration", 0,
+		"On-duration of each burst (e.g. 3s). Requires -burst-rate and -burst-period.")
+	flag.DurationVar(&c.BurstPeriod, "burst-period", 0,
+		"Period between burst start times (e.g. 12s). Off-burst portion = burst-period - burst-duration.")
+
 	flag.StringVar(&c.PayloadMode, "payload", "mixed",
 		"random|zeros|text|json|logline|mixed — affects compressibility, not size")
 	flag.Int64Var(&c.PayloadSeed, "payload-seed", 42, "Seed for payload RNG (reproducible)")
@@ -130,6 +147,11 @@ func (c *BenchConfig) Print() {
 	fmt.Printf("  Group:          %s  (initial-offset=%s)\n", c.GroupID, c.InitialOffset)
 	fmt.Printf("  Message size:   %d B   payload=%s (seed=%d)\n", c.MessageSize, c.PayloadMode, c.PayloadSeed)
 	fmt.Printf("  Target rate:    %d msg/s across %d producers\n", c.TargetRate, c.ProducerWorkers)
+	if c.BurstRate > 0 && c.BurstDuration > 0 && c.BurstPeriod > 0 {
+		fmt.Printf("  Burst:          %d msg/s for %v every %v (duty %.0f%%)\n",
+			c.BurstRate, c.BurstDuration, c.BurstPeriod,
+			100*c.BurstDuration.Seconds()/c.BurstPeriod.Seconds())
+	}
 	fmt.Printf("  Duration:       %s  (warmup: %s)\n", c.Duration, c.WarmupDuration)
 	fmt.Printf("  Acks:           %d  compression=%s  batch-bytes=%d  linger=%dms\n",
 		c.Acks, c.Compression, c.BatchBytes, c.LingerMs)
