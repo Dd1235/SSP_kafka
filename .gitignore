@@ -2,7 +2,6 @@
 .mod
 .sum
 temp/
-results*
 bin/
 NEXT_PHASE.md
 .*

@@ -1,0 +1,81 @@
+{
+  "config": {
+    "acks": 1,
+    "batch_size_bytes": 65536,
+    "compression": "snappy",
+    "consumer_goroutines": 4,
+    "duration_s": 30,
+    "linger_ms": 5,
+    "msg_size_bytes": 512,
+    "partitions": 12,
+    "producer_goroutines": 8,
+    "target_rate_msg_per_sec": 10000
+  },
+  "results": {
+    "avg_rate_msg_per_sec": 7418.909390249514,
+    "errors": 0,
+    "latency_ms": {
+      "max": 251.337,
+      "mean": 5.9971323823644695,
+      "min": 0.294,
+      "p50": 3.812,
+      "p90": 6.42,
+      "p95": 10.39,
+      "p99": 78.965,
+      "p999": 175.037,
+      "stddev": 14.033398859651644
+    },
+    "latency_sample_count": 293385,
+    "messages_received": 0,
+    "messages_sent": 293385,
+    "throughput_mb_per_sec": 3.6225143507077706,
+    "total_data_mb": 143.25439453125
+  },
+  "timeline": [
+    {
+      "ElapsedS": 5.000464,
+      "Rate": 9867.684278898918,
+      "ThroughputMB": 4.818205214306112,
+      "P50Ms": 3.48,
+      "P99Ms": 23.764,
+      "P999Ms": 42.127,
+      "Errors": 0
+    },
+    {
+      "ElapsedS": 10.000485375,
+      "Rate": 9846.357906819949,
+      "ThroughputMB": 4.807791946689428,
+      "P50Ms": 3.579,
+      "P99Ms": 12.812,
+      "P999Ms": 66.137,
+      "Errors": 0
+    },
+    {
+      "ElapsedS": 15.000462,
+      "Rate": 9690.44530283179,
+      "ThroughputMB": 4.731662745523335,
+      "P50Ms": 3.799,
+      "P99Ms": 64.474,
+      "P999Ms": 97.758,
+      "Errors": 0
+    },
+    {
+      "ElapsedS": 20.00047825,
+      "Rate": 9802.168142953537,
+      "ThroughputMB": 4.7862149135515315,
+      "P50Ms": 3.708,
+      "P99Ms": 8.986,
+      "P999Ms": 14.558,
+      "Errors": 0
+    },
+    {
+      "ElapsedS": 25.000445417,
+      "Rate": 9730.463896064219,
+      "ThroughputMB": 4.751203074250107,
+      "P50Ms": 4.175,
+      "P99Ms": 80.242,
+      "P999Ms": 127.867,
+      "Errors": 0
+    }
+  ]
+}

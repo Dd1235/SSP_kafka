@@ -1,0 +1,35 @@
+{
+  "config": {
+    "acks": 1,
+    "batch_size_bytes": 65536,
+    "compression": "snappy",
+    "consumer_goroutines": 4,
+    "duration_s": 20,
+    "linger_ms": 5,
+    "msg_size_bytes": 512,
+    "partitions": 12,
+    "producer_goroutines": 8,
+    "target_rate_msg_per_sec": 10000
+  },
+  "results": {
+    "avg_rate_msg_per_sec": 7684.878463108686,
+    "errors": 0,
+    "latency_ms": {
+      "max": 29.419,
+      "mean": 3.7545973242858084,
+      "min": 0.362,
+      "p50": 3.647,
+      "p90": 5.919,
+      "p95": 6.361,
+      "p99": 9.421,
+      "p999": 18.36,
+      "stddev": 1.998579365398208
+    },
+    "latency_sample_count": 197181,
+    "messages_received": 0,
+    "messages_sent": 197182,
+    "throughput_mb_per_sec": 3.7523820620647883,
+    "total_data_mb": 96.2802734375
+  },
+  "timeline": []
+}
