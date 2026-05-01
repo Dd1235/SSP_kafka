@@ -215,3 +215,30 @@ func ReadHeader(buf []byte) (worker, seq uint32, ts int64, ok bool) {
 	ok = true
 	return
 }
+
+/*
+the idea is that compression depends on what type of payload you send.
+Generator gives you payloads of a fixed size, in a chosen style
+Love the information theory flavour here,
+[10 12 32 43 523] has more entropy than [0 0 0 0 0]
+Random has high entropy
+Zeroes is the best
+Text is english like,
+Json is even streams very realistic, the keys repeat so compressible
+Logline server logs - very compressible, GET api/v1/.. repeated
+mixed - rotates the 5
+
+rand.Rand() is not thread safe, so random / json / logline -> lock
+zeroes / text -> no lock
+g.Next(buf, uint64(seq)) would be called on the same Generator instance, RNG keeps an internal state, g.r.Read() etc. mutate that internal state.
+Only one go routine should use the rng at a time
+Custome header: worker, seq, timestamp
+
+We introduce contention as payload generator is a data resource, will my thorughput drop becuse generator is throttling input?
+can kafka handle more?
+
+data generation cost + kafka performance is being mixed in?
+should I use generator per worker?
+or pre generate buffers?
+or pre generate a sample pool and randomly sample?
+*/

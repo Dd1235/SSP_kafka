@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Single-node Kafka (KRaft) for local benchmarking on Apple Silicon / 8GB.
 # For multi-broker or cross-host setups, replace this file; the Go bench code
 # is broker-agnostic (see `-broker` flag).
