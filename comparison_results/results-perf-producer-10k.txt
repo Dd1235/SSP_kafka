@@ -1,0 +1,7 @@
+[2026-05-01 00:42:11,240] WARN [Producer clientId=perf-producer-client] Error while fetching metadata with correlation id 1 : {perf-test-topic=UNKNOWN_TOPIC_OR_PARTITION} (org.apache.kafka.clients.NetworkClient)
+49952 records sent, 9982.4 records/sec (4.87 MB/sec), 4.6 ms avg latency, 312.0 ms max latency.
+49990 records sent, 9992.0 records/sec (4.88 MB/sec), 4.2 ms avg latency, 15.0 ms max latency.
+50110 records sent, 10020.0 records/sec (4.89 MB/sec), 4.4 ms avg latency, 20.0 ms max latency.
+50050 records sent, 10002.0 records/sec (4.88 MB/sec), 4.2 ms avg latency, 17.0 ms max latency.
+50010 records sent, 10000.0 records/sec (4.88 MB/sec), 4.2 ms avg latency, 18.0 ms max latency.
+300000 records sent, 9996.001599 records/sec (4.88 MB/sec), 4.29 ms avg latency, 312.00 ms max latency, 4 ms 50th, 7 ms 95th, 9 ms 99th, 17 ms 99.9th.
