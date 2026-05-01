@@ -53,6 +53,34 @@ func TestBuildSampleComputesLagPerPartition(t *testing.T) {
 	}
 }
 
+func TestSimulateUsesRatesAndPhase(t *testing.T) {
+	t.Parallel()
+
+	got := Simulate(SimulationConfig{
+		Partitions:        2,
+		Duration:          4 * time.Second,
+		PollInterval:      time.Second,
+		ProducerRate:      100,
+		ConsumerRate:      40,
+		PhaseAt:           2 * time.Second,
+		PhaseProducerRate: -1,
+		PhaseConsumerRate: 160,
+	})
+
+	if len(got) != 5 {
+		t.Fatalf("sample count = %d, want 5", len(got))
+	}
+	if got[1].TotalLag != 60 || got[2].TotalLag != 120 {
+		t.Fatalf("growth samples = %d/%d, want 60/120", got[1].TotalLag, got[2].TotalLag)
+	}
+	if got[3].TotalLag != 60 || got[4].TotalLag != 0 {
+		t.Fatalf("recovery samples = %d/%d, want 60/0", got[3].TotalLag, got[4].TotalLag)
+	}
+	if got[2].MaxLag != 60 {
+		t.Fatalf("max partition lag = %d, want 60", got[2].MaxLag)
+	}
+}
+
 func TestSamplesReturnsCopy(t *testing.T) {
 	t.Parallel()
 

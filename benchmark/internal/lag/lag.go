@@ -14,12 +14,12 @@ package lag
 import (
 	"context"
 	"fmt"
+	"kafka-bench-v4/internal/config"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
-	"kafka-bench-v4/internal/config"
 )
 
 type Sample struct {
@@ -247,3 +247,63 @@ func buildSample(start, now time.Time, parts []int32, ends, committed map[int32]
 		PerPartition: per,
 	}
 }
+
+/*
+lag ≈ constant (e.g. ~9000) => healthy
+because it's every 1s that sarama commits the offset
+so messages are processed by consumer at 9000 msg / sec
+but because of the commit lag, it shows 9k
+so committed != processed
+Backpressure: lag keeps increasing → 10k → 20k → 50k
+We measure per partition lag also as there may be hot partitions
+
+Lag = EndOffset (latest produced) - CommitOffset (consumer progress)
+= Broker HWM - committed consumer offset
+
+concurrency design:
+samples -> protected by mutex
+current -> atomic (fast path)
+
+we get
+- real time lag signal
+- historical timeline
+- derived metrics
+
+
+Creates a new sarama client
+Multiple goroutines may read the current
+So to avoid data race we use atomic
+
+atomic operation is a cpu level safe read/write operation with memory ordering guarantees
+
+we may get artifical contention if every guy has to lock the same mutex, so atomic is better
+
+we don't want one goroutine to append while another reads samples so we lock it
+
+reading while appending to a slide is dangerous, a slide has a pointer, length, and capacity. Appending can reallocate the underlying array!
+
+struct{} - empty, zero bytes
+
+run closes done when it exists
+Wait() blocks until done is closed
+
+need to learn underlying implementation of context in go for sure! its all open source!
+
+poller runs until someone cancels the conetxt
+we use pointer receivers to take on methods on Poller
+
+
+ticker -> sends the current time repeatedly on a channel
+
+ticker uses runtime resources, if it's not stopped, it can leak
+
+so we use the client to get the partitions a topic lives in.
+get the end offset per partition.
+Then get committed offset per cg
+clamp negative lag to zero
+
+summary gets the max total lag, final total lag, recovery drain rate, time to drain, and sample count
+
+notice we copy sample instead of return the slude directly, so that external code can't corrupt poller history
+
+*/
