@@ -1,0 +1,1 @@
+These are written in a sort of hand-wavy manner, and without proper formatting. Please refer to paper and the main readme!
