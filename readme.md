@@ -468,7 +468,7 @@ Selected design choices and where they live in the codebase.
 
 ---
 
-## What was actually built (full list)
+## What was actually built
 
 - **Modular Go benchmark, ~1 300 lines, 10 internal packages.**
   Acyclic dependency graph; one wiring file (`cmd/bench/main.go`)
